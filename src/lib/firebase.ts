@@ -126,9 +126,9 @@ export let isFirebasePlaceholder = (
 
 const app = initializeApp(firebaseConfig);
 
-export const dbIdToUse = isVercelOrExternal 
-  ? (import.meta.env.VITE_FIREBASE_DATABASE_ID || "") 
-  : firebaseAppletConfig.firestoreDatabaseId;
+export const dbIdToUse = import.meta.env.VITE_FIREBASE_DATABASE_ID 
+  || firebaseAppletConfig.firestoreDatabaseId 
+  || "";
 
 // Initialize Firestore with extreme resilience options:
 // 1. Force Long Polling (experimentalForceLongPolling: true) to bypass VPN/proxy WebSocket restrictions
