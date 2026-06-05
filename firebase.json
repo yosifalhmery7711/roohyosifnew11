@@ -1,7 +1,7 @@
 {
   "firestore": [
     {
-      "database": "remixed-firestore-database-id",
+      "database": "https://rooh-20eff-default-rtdb.firebaseio.com",
       "rules": "firestore.rules"
     }
   ]
