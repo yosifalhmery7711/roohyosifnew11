@@ -126,9 +126,12 @@ export let isFirebasePlaceholder = (
 
 const app = initializeApp(firebaseConfig);
 
-export const dbIdToUse = import.meta.env.VITE_FIREBASE_DATABASE_ID 
-  || firebaseAppletConfig.firestoreDatabaseId 
-  || "";
+const configuredDbId = (import.meta.env.VITE_FIREBASE_DATABASE_ID || "").trim();
+const isUrlOrUri = configuredDbId.includes("://") || configuredDbId.includes("/") || configuredDbId.includes(".com") || configuredDbId.includes(".app");
+
+export const dbIdToUse = (configuredDbId && !isUrlOrUri)
+  ? configuredDbId
+  : (isVercelOrExternal ? "" : (firebaseAppletConfig.firestoreDatabaseId || ""));
 
 // Initialize Firestore with extreme resilience options:
 // 1. Force Long Polling (experimentalForceLongPolling: true) to bypass VPN/proxy WebSocket restrictions
