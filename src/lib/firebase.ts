@@ -128,8 +128,9 @@ const app = initializeApp(firebaseConfig);
 
 const configuredDbId = (import.meta.env.VITE_FIREBASE_DATABASE_ID || "").trim();
 const isUrlOrUri = configuredDbId.includes("://") || configuredDbId.includes("/") || configuredDbId.includes(".com") || configuredDbId.includes(".app");
+const isPlaceholderDb = ["default", "(default)", "none", "null", "undefined"].includes(configuredDbId.toLowerCase());
 
-export const dbIdToUse = (configuredDbId && !isUrlOrUri)
+export const dbIdToUse = (configuredDbId && !isUrlOrUri && !isPlaceholderDb)
   ? configuredDbId
   : (isVercelOrExternal ? "" : (firebaseAppletConfig.firestoreDatabaseId || ""));
 

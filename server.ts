@@ -1525,7 +1525,9 @@ export const metadata = { type: "${type}", checksum: "${Buffer.from(base64.subst
       // Resolve Firestore Project IDs and keys dynamically
       const pId = clientConfig?.projectId || globalFirebaseConfig.projectId;
       const aKey = clientConfig?.apiKey || globalFirebaseConfig.apiKey;
-      const dbIdVal = clientConfig?.firestoreDatabaseId || globalDatabaseId || "default";
+      const dbIdVal = (clientConfig && typeof clientConfig.firestoreDatabaseId === "string")
+        ? clientConfig.firestoreDatabaseId
+        : (globalDatabaseId || "default");
       const dbId = (dbIdVal === "default" || dbIdVal === "undefined" || dbIdVal === "null" || dbIdVal === "") ? "(default)" : dbIdVal;
 
       if (!pId || !aKey) {
