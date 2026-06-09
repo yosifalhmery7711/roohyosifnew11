@@ -1123,10 +1123,10 @@ export const ForensicPanel6532 = ({ onClose, showToast }: { onClose: () => void,
             }
           };
 
-          // Race the direct check with a 1500ms timeout to keep the preview fast and responsive
+          // Race the direct check with a 10000ms timeout to support slow mobile connections on Vercel
           await Promise.race([
             directCheckPromise(),
-            new Promise((_, reject) => setTimeout(() => reject(new Error("Direct check timed out (Expected within browser sandbox; seamless fallback to proxy active)")), 1500))
+            new Promise((_, reject) => setTimeout(() => reject(new Error("Direct check timed out (Expected within browser sandbox; seamless fallback to proxy active)")), 10000))
           ]);
         } catch (err: any) {
           clientErrorMsg = err instanceof Error ? err.message : String(err);

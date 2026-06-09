@@ -75,8 +75,7 @@ const REAL_ROOH_CONFIG = {
   databaseURL: ""
 };
 
-const getEnvValue = (val1?: string, val2?: string) => {
-  const val = val1 || val2;
+const getEnvValue = (val?: string) => {
   if (!val) return null;
   const lowercase = val.toLowerCase();
   if (
@@ -99,21 +98,21 @@ const isVercelOrExternal = typeof window !== 'undefined' && (
    !window.location.hostname.includes('.run.app'))
 );
 
-const envApiKey = getEnvValue(import.meta.env.VITE_FIREBASE_API_KEY, import.meta.env.VITE_FIR_API_KEY);
-const envProjectId = getEnvValue(import.meta.env.VITE_FIREBASE_PROJECT_ID, import.meta.env.VITE_FIR__JECT_ID);
+const envApiKey = getEnvValue(import.meta.env.VITE_FIREBASE_API_KEY);
+const envProjectId = getEnvValue(import.meta.env.VITE_FIREBASE_PROJECT_ID);
 
 // We want to force connect to the user's real Firebase project unconditionally to guarantee successful synchronization unless custom env keys are configured on Vercel/external hosting
 const useRealRooh = !isVercelOrExternal || !(envApiKey && envProjectId);
 
 const firebaseConfig = useRealRooh ? REAL_ROOH_CONFIG : {
   apiKey: envApiKey!,
-  authDomain: getEnvValue(import.meta.env.VITE_FIREBASE_AUTH_DOMAIN, import.meta.env.VITE_FIR__DOMAIN) || (envProjectId + ".firebaseapp.com"),
-  databaseURL: getEnvValue(import.meta.env.VITE_FIREBASE_DATABASE_URL, import.meta.env.VITE_FIR_DATABASE_URL) || "https://" + envProjectId + "-default-rtdb.firebaseio.com",
+  authDomain: getEnvValue(import.meta.env.VITE_FIREBASE_AUTH_DOMAIN) || (envProjectId + ".firebaseapp.com"),
+  databaseURL: getEnvValue(import.meta.env.VITE_FIREBASE_DATABASE_URL) || "https://" + envProjectId + "-default-rtdb.firebaseio.com",
   projectId: envProjectId!,
-  storageBucket: getEnvValue(import.meta.env.VITE_FIREBASE_STORAGE_BUCKET, import.meta.env.VITE_FIR__BUCKET) || (envProjectId + ".firebasestorage.app"),
-  messagingSenderId: getEnvValue(import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID, import.meta.env.VITE_FIR_NDER_ID) || REAL_ROOH_CONFIG.messagingSenderId,
-  appId: getEnvValue(import.meta.env.VITE_FIREBASE_APP_ID, import.meta.env.VITE_FIR__APP_ID) || REAL_ROOH_CONFIG.appId,
-  measurementId: getEnvValue(import.meta.env.VITE_FIREBASE_MEASUREMENT_ID, import.meta.env.VITE_FIR__MEASUREMENT_ID) || REAL_ROOH_CONFIG.measurementId
+  storageBucket: getEnvValue(import.meta.env.VITE_FIREBASE_STORAGE_BUCKET) || (envProjectId + ".firebasestorage.app"),
+  messagingSenderId: getEnvValue(import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID) || REAL_ROOH_CONFIG.messagingSenderId,
+  appId: getEnvValue(import.meta.env.VITE_FIREBASE_APP_ID) || REAL_ROOH_CONFIG.appId,
+  measurementId: getEnvValue(import.meta.env.VITE_FIREBASE_MEASUREMENT_ID) || REAL_ROOH_CONFIG.measurementId
 };
 
 export let isFirebasePlaceholder = (
@@ -132,7 +131,7 @@ const isPlaceholderDb = ["default", "(default)", "none", "null", "undefined"].in
 
 export const dbIdToUse = (configuredDbId && !isUrlOrUri && !isPlaceholderDb)
   ? configuredDbId
-  : (isVercelOrExternal ? "" : (firebaseAppletConfig.firestoreDatabaseId || ""));
+  : (firebaseAppletConfig.firestoreDatabaseId || "");
 
 // Initialize Firestore with extreme resilience options:
 // 1. Force Long Polling (experimentalForceLongPolling: true) to bypass VPN/proxy WebSocket restrictions
@@ -399,7 +398,7 @@ export async function resilientWriteDoc(pathStr: string, data: any, avoidAutoQue
   if (!isFirebasePlaceholder && (!isClientDbBroken || isVercelOrExternal)) {
     try {
       const docRef = doc(db, parts[0], ...parts.slice(1));
-      const timeoutMs = isVercelOrExternal ? 2500 : 1500;
+      const timeoutMs = isVercelOrExternal ? 8000 : 1500;
       await runFirestoreWithTimeout(setDoc(docRef, data, { merge: true }), timeoutMs);
       return; // Direct client-side SDK write succeeded!
     } catch (err: any) {
@@ -478,7 +477,7 @@ export async function resilientReadDoc(pathStr: string): Promise<any | null> {
   if (!isFirebasePlaceholder && (!isClientDbBroken || isVercelOrExternal)) {
     try {
       const docRef = doc(db, parts[0], ...parts.slice(1));
-      const timeoutMs = isVercelOrExternal ? 2500 : 1500;
+      const timeoutMs = isVercelOrExternal ? 8000 : 1500;
       const snap = await runFirestoreWithTimeout(getDocFromServer(docRef), timeoutMs);
       if (snap.exists()) {
         return snap.data();
@@ -548,7 +547,7 @@ export async function resilientGetDocs(pathStr: string): Promise<any[]> {
   if (!isFirebasePlaceholder && (!isClientDbBroken || isVercelOrExternal)) {
     try {
       const colRef = collection(db, parts[0], ...parts.slice(1));
-      const timeoutMs = isVercelOrExternal ? 2500 : 1500;
+      const timeoutMs = isVercelOrExternal ? 8000 : 1500;
       const snap = await runFirestoreWithTimeout(getDocs(colRef), timeoutMs);
       const list: any[] = [];
       snap.forEach((docSnap) => {
@@ -618,7 +617,7 @@ export async function resilientDeleteDoc(pathStr: string): Promise<void> {
   if (!isFirebasePlaceholder && (!isClientDbBroken || isVercelOrExternal)) {
     try {
       const docRef = doc(db, parts[0], ...parts.slice(1));
-      const timeoutMs = isVercelOrExternal ? 2500 : 1500;
+      const timeoutMs = isVercelOrExternal ? 8000 : 1500;
       await runFirestoreWithTimeout(getDoc(docRef), timeoutMs); // check if exists before delete
       const { deleteDoc: fDeleteDoc } = await import('firebase/firestore');
       await runFirestoreWithTimeout(fDeleteDoc(docRef), timeoutMs);

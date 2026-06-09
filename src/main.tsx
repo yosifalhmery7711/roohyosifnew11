@@ -26,8 +26,16 @@ try {
         url = (input as any).url;
       }
 
-      const isRelativeApi = url.startsWith('/api/') || url.startsWith('/aa/');
-      if (isRelativeApi) {
+      let parsedUrl: URL | null = null;
+      try {
+        parsedUrl = new URL(url, window.location.href);
+      } catch (e) {}
+
+      const isRelativeApi = !!(parsedUrl && 
+                            (parsedUrl.pathname.startsWith('/api/') || parsedUrl.pathname.startsWith('/aa/')) &&
+                            (parsedUrl.origin === window.location.origin || parsedUrl.origin === 'null'));
+
+      if (isRelativeApi && parsedUrl) {
         // Detect if we are hosted on an external client runner like Vercel
         const isVercel = window.location.hostname.includes('vercel.app') || 
                          (!window.location.hostname.includes('localhost') && 
@@ -35,7 +43,7 @@ try {
                           !window.location.hostname.includes('.run.app'));
 
         const backendBase = 'https://ais-pre-7wda5scnznd4bea77v3tw4-365000381785.europe-west1.run.app';
-        const absoluteUrl = `${backendBase}${url}`;
+        const absoluteUrl = `${backendBase}${parsedUrl.pathname}${parsedUrl.search}`;
 
         if (isVercel) {
           try {
