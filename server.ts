@@ -21,9 +21,31 @@ import Groq from "groq-sdk";
 
 dotenv.config();
 
+function sanitizeDatabaseIdOnServer(databaseId?: string): string | undefined {
+  if (!databaseId) return undefined;
+  const trimmed = databaseId.trim();
+  const lowercase = trimmed.toLowerCase();
+  if (
+    lowercase === "default" || 
+    lowercase === "(default)" || 
+    lowercase === "none" || 
+    lowercase === "null" || 
+    lowercase === "undefined" || 
+    lowercase === "" ||
+    trimmed.includes("://") || 
+    trimmed.includes("/") || 
+    trimmed.includes(".com") || 
+    trimmed.includes(".app")
+  ) {
+    return undefined;
+  }
+  return trimmed;
+}
+
 function getResilientFirestoreOnServer(fbApp: any, databaseId?: string) {
-  if (databaseId && databaseId !== "default" && databaseId !== "undefined" && databaseId !== "null" && databaseId !== "") {
-    return getFirestoreOnServer(fbApp, databaseId);
+  const cleanId = sanitizeDatabaseIdOnServer(databaseId);
+  if (cleanId) {
+    return getFirestoreOnServer(fbApp, cleanId);
   } else {
     return getFirestoreOnServer(fbApp);
   }
@@ -1528,7 +1550,8 @@ export const metadata = { type: "${type}", checksum: "${Buffer.from(base64.subst
       const dbIdVal = (clientConfig && typeof clientConfig.firestoreDatabaseId === "string")
         ? clientConfig.firestoreDatabaseId
         : (globalDatabaseId || "default");
-      const dbId = (dbIdVal === "default" || dbIdVal === "undefined" || dbIdVal === "null" || dbIdVal === "") ? "(default)" : dbIdVal;
+      const cleanDbId = sanitizeDatabaseIdOnServer(dbIdVal);
+      const dbId = cleanDbId || "(default)";
 
       if (!pId || !aKey) {
         return res.json({ success: false, error: "Missing Firebase project credentials" });

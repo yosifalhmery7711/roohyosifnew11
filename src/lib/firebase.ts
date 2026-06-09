@@ -125,13 +125,19 @@ export let isFirebasePlaceholder = (
 
 const app = initializeApp(firebaseConfig);
 
-const configuredDbId = (import.meta.env.VITE_FIREBASE_DATABASE_ID || "").trim();
-const isUrlOrUri = configuredDbId.includes("://") || configuredDbId.includes("/") || configuredDbId.includes(".com") || configuredDbId.includes(".app");
-const isPlaceholderDb = ["default", "(default)", "none", "null", "undefined"].includes(configuredDbId.toLowerCase());
+const rawEnvDbId = import.meta.env.VITE_FIREBASE_DATABASE_ID;
+const databaseIdHasBeenSet = typeof rawEnvDbId === 'string';
 
-export const dbIdToUse = (configuredDbId && !isUrlOrUri && !isPlaceholderDb)
-  ? configuredDbId
-  : (firebaseAppletConfig.firestoreDatabaseId || "");
+const getCleanDbId = (id: string) => {
+  const trimmed = (id || "").trim();
+  const isUrl = trimmed.includes("://") || trimmed.includes("/") || trimmed.includes(".com") || trimmed.includes(".app");
+  const isPlaceholder = ["default", "(default)", "none", "null", "undefined", ""].includes(trimmed.toLowerCase());
+  return (isUrl || isPlaceholder) ? "" : trimmed;
+};
+
+export const dbIdToUse = databaseIdHasBeenSet
+  ? getCleanDbId(rawEnvDbId || "")
+  : getCleanDbId(firebaseAppletConfig.firestoreDatabaseId || "");
 
 // Initialize Firestore with extreme resilience options:
 // 1. Force Long Polling (experimentalForceLongPolling: true) to bypass VPN/proxy WebSocket restrictions
@@ -291,11 +297,24 @@ export async function executeFirestoreREST(
 ): Promise<any> {
   const pId = config?.projectId || firebaseConfig.projectId;
   const aKey = config?.apiKey || firebaseConfig.apiKey;
-  const dbIdVal = config?.firestoreDatabaseId || dbIdToUse || "default";
-  const dbId = (dbIdVal === "default" || dbIdVal === "undefined" || dbIdVal === "null" || dbIdVal === "") ? "(default)" : dbIdVal;
+  const dbIdVal = config?.firestoreDatabaseId || dbIdToUse || "(default)";
+  const trimmed = dbIdVal.trim();
+  const lowercase = trimmed.toLowerCase();
+  const dbId = (
+    lowercase === "default" || 
+    lowercase === "(default)" || 
+    lowercase === "none" || 
+    lowercase === "null" || 
+    lowercase === "undefined" || 
+    lowercase === "" ||
+    trimmed.includes("://") || 
+    trimmed.includes("/") || 
+    trimmed.includes(".com") || 
+    trimmed.includes(".app")
+  ) ? "(default)" : trimmed;
   
   const runREST = async (targetDbId: string) => {
-    const activeDb = targetDbId === "default" ? "(default)" : targetDbId;
+    const activeDb = (targetDbId === "default" || targetDbId === "(default)") ? "(default)" : targetDbId;
     const baseUrl = `https://firestore.googleapis.com/v1/projects/${pId}/databases/${activeDb}/documents/${pathStr}`;
     const url = `${baseUrl}?key=${aKey}`;
     
