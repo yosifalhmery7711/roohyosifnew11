@@ -42,24 +42,45 @@ try {
                           !window.location.hostname.includes('127.0.0.1') && 
                           !window.location.hostname.includes('.run.app'));
 
-        const backendBase = 'https://ais-pre-7wda5scnznd4bea77v3tw4-365000381785.europe-west1.run.app';
-        const absoluteUrl = `${backendBase}${parsedUrl.pathname}${parsedUrl.search}`;
+        const envBackend = (import.meta.env.VITE_BACKEND_URL || "").trim().replace(/\/$/, "");
+        const primaryBackend = envBackend || 'https://ais-pre-7wda5scnznd4bea77v3tw4-365000381785.europe-west1.run.app';
+        const fallbackBackend = 'https://ais-dev-7wda5scnznd4bea77v3tw4-365000381785.europe-west1.run.app';
 
         if (isVercel) {
+          // A. Try Primary (Custom or ais-pre) Backend URL
           try {
-            let requestToUse: RequestInfo = absoluteUrl;
+            const absoluteUrlPre = `${primaryBackend}${parsedUrl.pathname}${parsedUrl.search}`;
+            let requestToUse: RequestInfo = absoluteUrlPre;
             if (input instanceof Request) {
-              requestToUse = new Request(absoluteUrl, input);
+              requestToUse = new Request(absoluteUrlPre, input);
             }
             const response = await originalFetch(requestToUse, init);
-            if (response.status !== 404) {
+            if (response.status !== 404 && response.status !== 502 && response.status !== 503) {
               return response;
             }
           } catch (err) {
-            console.warn(`Direct absolute fetch to backend failed on Vercel, trying relative`, err);
+            console.warn(`Fetch to primary backend failed on Vercel:`, err);
+          }
+
+          // B. Try Fallback (ais-dev) Backend URL
+          if (primaryBackend !== fallbackBackend) {
+            try {
+              const absoluteUrlDev = `${fallbackBackend}${parsedUrl.pathname}${parsedUrl.search}`;
+              let requestToUse: RequestInfo = absoluteUrlDev;
+              if (input instanceof Request) {
+                requestToUse = new Request(absoluteUrlDev, input);
+              }
+              const response = await originalFetch(requestToUse, init);
+              if (response.status !== 404 && response.status !== 502 && response.status !== 503) {
+                return response;
+              }
+            } catch (err) {
+              console.warn(`Fetch to fallback backend failed on Vercel:`, err);
+            }
           }
         } else {
           // Normal environment or emulator: try relative first, fallback on 404 or network disconnect
+          const absoluteUrl = `${primaryBackend}${parsedUrl.pathname}${parsedUrl.search}`;
           try {
             const response = await originalFetch(input, init);
             if (response.status === 404) {
