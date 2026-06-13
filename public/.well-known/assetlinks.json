@@ -1,15 +1,8 @@
-[
-  {
-    "relation": [
-      "delegate_permission/common.handle_all_urls",
-      "delegate_permission/common.use_as_origin"
-    ],
-    "target": {
-      "namespace": "android_app",
-      "package_name": "app.rouh.standalone",
-      "sha256_cert_fingerprints": [
-        "3A:41:1E:B8:12:DA:11:4E:C0:81:E7:22:79:52:93:A0:22:D2:C7:EF:4E:CD:AD:26:00:39:5C:3E:AD:B8:CA:82"
-      ]
-    }
-  }
-]
+[{
+      "relation": ["delegate_permission/common.handle_all_urls"],
+      "target": {
+        "namespace": "android_app",
+        "package_name": "app.run.europe_west1.ais_pre_7wda5scnznd4bea77v3tw4_365000381785.twa",
+        "sha256_cert_fingerprints": ["32:10:F6:D3:80:28:F1:22:69:9E:0F:66:49:05:C0:55:26:00:6F:BF:A2:08:F7:AB:0E:80:4E:D3:1E:0C:37:5C"]
+      }
+    }]
