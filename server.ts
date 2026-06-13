@@ -769,9 +769,40 @@ async function startServer() {
         });
       } else {
         // --- DRASTIC FULL ACCOUNT CLEAN (ADMIN 9865) ---
-        // Full account and files wipe (user chat folders + uploads)
+        // Retain user's name, phone, friends list, and chats by preserving profile.json
+        let preservedProfile: any = null;
+        if (fs.existsSync(userPath)) {
+          const profilePath = path.join(userPath, 'profile.json');
+          if (fs.existsSync(profilePath)) {
+            try {
+              const content = JSON.parse(fs.readFileSync(profilePath, 'utf8'));
+              preservedProfile = {
+                name: content.name || 'مجهول',
+                phone: content.phone || safePhone,
+                deviceId: content.deviceId || deviceId || '',
+                friends: content.friends || [],
+                chats: content.chats || []
+              };
+            } catch(e) {}
+          }
+        }
+
+        // Recreate directory cleanly to drop referrals or other unrequested local data files, but preserve profile.json
         if (fs.existsSync(userPath)) {
           fs.rmSync(userPath, { recursive: true, force: true });
+        }
+        fs.mkdirSync(userPath, { recursive: true });
+
+        if (preservedProfile) {
+          fs.writeFileSync(path.join(userPath, 'profile.json'), JSON.stringify(preservedProfile, null, 2));
+        } else {
+          fs.writeFileSync(path.join(userPath, 'profile.json'), JSON.stringify({
+            name: usernameEn || 'مجهول',
+            phone: safePhone,
+            deviceId: deviceId || '',
+            friends: [],
+            chats: []
+          }, null, 2));
         }
 
         // Wipe uploads
@@ -802,7 +833,7 @@ async function startServer() {
           });
         }
 
-        return res.json({ success: true, message: "تم مسح وتصفير حساب العميل ومحادثاته وملفاته نهائياً من كافة السجلات." });
+        return res.json({ success: true, message: "تم مسح وتصفير ملفات العميل الإدارية بنجاح، مع الإبقاء على هويته ورقم هاتفه ومحادثات ومجموعات أصدقائه بأمان تام." });
       }
     } catch (e: any) {
       console.error("Delete user endpoint error:", e);

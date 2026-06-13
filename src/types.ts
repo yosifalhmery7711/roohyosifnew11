@@ -81,6 +81,10 @@ export interface CVData {
   skills: string[];
   languages: Language[];
   template: 'classic' | 'modern' | 'minimal' | 'elegant' | 'executive' | 'tech' | 'modern_pro' | 'creative' | 'classic_pro' | 'hot';
+  location?: string;
+  nationality?: string;
+  maritalStatus?: string;
+  birthDate?: string;
 }
 
 export interface ChatMessage {

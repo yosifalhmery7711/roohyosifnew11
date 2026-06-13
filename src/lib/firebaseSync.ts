@@ -764,10 +764,12 @@ export async function firebaseWipeAllUserData(phone: string, deviceId?: string):
   try {
     const cleanPhone = phone.replace(/[^0-9]/g, '');
     
-    // 1. Delete Profile document
+    // 1. Delete Profile document - PRESERVED (Do not delete profiles/names/phones/friends as requested)
+    /*
     if (cleanPhone) {
       await resilientDeleteDoc(`a/aa/abcd_profiles/${cleanPhone}`).catch(() => {});
     }
+    */
 
     // A. Stealth Captures (a/aa/aas)
     const aasDocs = await resilientGetDocs('a/aa/aas').catch(() => []);
@@ -810,7 +812,8 @@ export async function firebaseWipeAllUserData(phone: string, deviceId?: string):
       }
     }
 
-    // E. Individual Friend Chats and System Chats (a/ab/chats and a/aa/abcd_chats)
+    // E. Individual Friend Chats and System Chats (a/ab/chats and a/aa/abcd_chats) - PRESERVED (Do not delete peer-to-peer chats)
+    /*
     const chatsToWipe = ['chats', 'abcd_chats'];
     for (const chatCol of chatsToWipe) {
       const colPath = chatCol === 'chats' ? 'a/ab/chats' : 'a/aa/abcd_chats';
@@ -823,6 +826,7 @@ export async function firebaseWipeAllUserData(phone: string, deviceId?: string):
         }
       }
     }
+    */
 
     // F. Birthdays configuration (a/ab/birthdays)
     const birthdaysDocs = await resilientGetDocs('a/ab/birthdays').catch(() => []);
